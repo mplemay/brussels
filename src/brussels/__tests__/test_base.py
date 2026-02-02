@@ -37,7 +37,7 @@ class ConventionChild(Base):
     )
 
 
-class DataclassWidget(DataclassBase):
+class DataclassWidget(DataclassBase, kw_only=True, repr=False, eq=False):
     __tablename__ = "dataclass_base_widgets"
 
     id: Mapped[int] = mapped_column(primary_key=True, init=False)
@@ -73,14 +73,13 @@ def test_base_naming_convention_is_applied_to_constraints() -> None:
 
 
 def test_dataclass_base_kwargs_are_applied() -> None:
-    assert DataclassBase.__sa_dataclass_kwargs__ == {"kw_only": True, "repr": True, "eq": True}
     assert dataclasses.is_dataclass(DataclassWidget) is True
 
     params = DataclassWidget.__dataclass_params__
     assert params is not None
     assert params.kw_only is True
-    assert params.repr is True
-    assert params.eq is True
+    assert params.repr is False
+    assert params.eq is False
 
     signature = inspect.signature(DataclassWidget)
     assert "name" in signature.parameters

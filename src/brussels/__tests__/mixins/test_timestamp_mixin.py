@@ -3,18 +3,15 @@ import time
 from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
+from brussels.base import Base
 from brussels.mixins import PrimaryKeyMixin, TimestampMixin
 from brussels.types import DateTimeUTC
 
 
-class Base(MappedAsDataclass, DeclarativeBase):
-    pass
-
-
 class Widget(Base, PrimaryKeyMixin, TimestampMixin):
-    __tablename__ = "widgets"
+    __tablename__ = "timestamp_widgets"
 
     name: Mapped[str] = mapped_column()
 

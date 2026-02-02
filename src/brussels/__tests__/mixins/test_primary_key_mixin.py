@@ -1,9 +1,10 @@
 import inspect
+from collections.abc import Iterator
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Table, create_engine
+from sqlalchemy import Engine, Table, create_engine
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -15,6 +16,15 @@ class Widget(DataclassBase, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "primary_key_widgets"
 
     name: Mapped[str] = mapped_column()
+
+
+@pytest.fixture
+def engine() -> Iterator[Engine]:
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 def test_id_column_definition() -> None:
@@ -40,8 +50,7 @@ def test_id_not_in_init_signature() -> None:
         widget_cls(id=uuid4(), name="widget")
 
 
-def test_id_default_factory_generates_uuid_on_flush() -> None:
-    engine = create_engine("sqlite:///:memory:")
+def test_id_default_factory_generates_uuid_on_flush(engine: Engine) -> None:
     DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:

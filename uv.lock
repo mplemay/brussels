@@ -23,11 +23,6 @@ dependencies = [
     { name = "sqlalchemy" },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "pre-commit" },
@@ -41,11 +36,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "sqlalchemy", specifier = ">=2,<3" },
-]
-provides-extras = ["dev"]
+requires-dist = [{ name = "sqlalchemy", specifier = ">=2,<3" }]
 
 [package.metadata.requires-dev]
 dev = [

@@ -1,0 +1,107 @@
+import inspect
+import time
+from datetime import datetime, timedelta
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, Session, mapped_column
+
+from brussels.mixins import PrimaryKeyMixin, TimestampMixin
+from brussels.types import DateTimeUTC
+
+
+class Base(MappedAsDataclass, DeclarativeBase):
+    pass
+
+
+class Widget(Base, PrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "widgets"
+
+    name: Mapped[str] = mapped_column()
+
+
+def assert_is_utc(value: datetime) -> None:
+    assert value.tzinfo is not None
+    assert value.utcoffset() == timedelta(0)
+
+
+def test_timestamp_column_definitions() -> None:
+    created_at = Widget.__table__.c.created_at
+    updated_at = Widget.__table__.c.updated_at
+    deleted_at = Widget.__table__.c.deleted_at
+
+    assert isinstance(created_at.type, DateTimeUTC)
+    assert isinstance(updated_at.type, DateTimeUTC)
+    assert isinstance(deleted_at.type, DateTimeUTC)
+
+    assert created_at.default is not None
+    assert "now()" in str(created_at.default.arg)
+
+    assert updated_at.default is not None
+    assert "now()" in str(updated_at.default.arg)
+    assert updated_at.onupdate is not None
+    assert "now()" in str(updated_at.onupdate.arg)
+
+    assert deleted_at.nullable is True
+    assert deleted_at.default is None or deleted_at.default.arg is None
+
+
+def test_timestamps_not_in_init_signature() -> None:
+    signature = inspect.signature(Widget)
+    assert "created_at" not in signature.parameters
+    assert "updated_at" not in signature.parameters
+    assert "deleted_at" not in signature.parameters
+
+
+def test_timestamps_populated_on_insert() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        widget = Widget(name="widget")
+        session.add(widget)
+        session.commit()
+        session.refresh(widget)
+
+        assert widget.created_at is not None
+        assert widget.updated_at is not None
+        assert_is_utc(widget.created_at)
+        assert_is_utc(widget.updated_at)
+
+
+def test_updated_at_changes_on_update() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        widget = Widget(name="widget")
+        session.add(widget)
+        session.commit()
+        session.refresh(widget)
+        before_update = widget.updated_at
+
+        time.sleep(1.1)
+        widget.name = "updated"
+        session.commit()
+        session.refresh(widget)
+
+        assert widget.updated_at >= before_update
+        assert_is_utc(widget.updated_at)
+
+
+def test_mark_deleted_sets_deleted_at() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        widget = Widget(name="widget")
+        session.add(widget)
+        session.commit()
+        session.refresh(widget)
+
+        assert widget.deleted_at is None
+        widget.mark_deleted()
+        session.commit()
+        session.refresh(widget)
+
+        assert widget.deleted_at is not None
+        assert_is_utc(widget.deleted_at)

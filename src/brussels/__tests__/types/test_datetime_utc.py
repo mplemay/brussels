@@ -16,7 +16,7 @@ def test_process_bind_param_returns_none() -> None:
 @pytest.mark.parametrize("value", [date(2024, 1, 1), object()])
 def test_process_bind_param_rejects_non_datetime(value: object) -> None:
     with pytest.raises(TypeError) as excinfo:
-        DateTimeUTC().process_bind_param(value, None)
+        DateTimeUTC().process_bind_param(value, None)  # type: ignore[arg-type]
 
     message = str(excinfo.value)
     assert "DateTimeUTC requires datetime object" in message
@@ -25,7 +25,7 @@ def test_process_bind_param_rejects_non_datetime(value: object) -> None:
 
 
 def test_process_bind_param_converts_naive_to_utc() -> None:
-    input_value = datetime(2024, 1, 1, 12, 0)
+    input_value = datetime(2024, 1, 1, 12, 0, tzinfo=UTC).replace(tzinfo=None)
     output_value = DateTimeUTC().process_bind_param(input_value, None)
 
     assert output_value is not None
@@ -47,7 +47,7 @@ def test_process_result_value_returns_none() -> None:
 
 
 def test_process_result_value_normalizes_naive() -> None:
-    input_value = datetime(2024, 1, 1, 12, 0)
+    input_value = datetime(2024, 1, 1, 12, 0, tzinfo=UTC).replace(tzinfo=None)
     output_value = DateTimeUTC().process_result_value(input_value, None)
 
     assert output_value is not None
@@ -68,7 +68,7 @@ def test_type_decorator_bind_processor() -> None:
     processor = DateTimeUTC().bind_processor(sqlite_dialect())
     assert processor is not None
 
-    input_value = datetime(2024, 1, 1, 12, 0)
+    input_value = datetime(2024, 1, 1, 12, 0, tzinfo=UTC).replace(tzinfo=None)
     output_value = processor(input_value)
 
     assert output_value is not None

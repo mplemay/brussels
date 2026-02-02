@@ -5,12 +5,12 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from brussels.base import Base
+from brussels.base import DataclassBase
 from brussels.mixins import PrimaryKeyMixin, TimestampMixin
 from brussels.types import DateTimeUTC
 
 
-class Widget(Base, PrimaryKeyMixin, TimestampMixin):
+class Widget(DataclassBase, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "timestamp_widgets"
 
     name: Mapped[str] = mapped_column()
@@ -51,7 +51,7 @@ def test_timestamps_not_in_init_signature() -> None:
 
 def test_timestamps_populated_on_insert() -> None:
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")
@@ -67,7 +67,7 @@ def test_timestamps_populated_on_insert() -> None:
 
 def test_updated_at_changes_on_update() -> None:
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")
@@ -87,7 +87,7 @@ def test_updated_at_changes_on_update() -> None:
 
 def test_mark_deleted_sets_deleted_at() -> None:
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")

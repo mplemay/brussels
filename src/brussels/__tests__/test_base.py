@@ -11,17 +11,10 @@ from brussels.base import NAMING_CONVENTION, TYPE_ANNOTATION_MAP, Base, Dataclas
 from brussels.types import DateTimeUTC
 
 
-class DataclassWidget(Base):
-    __tablename__ = "base_dataclass_widgets"
+class BaseWidget(Base):
+    __tablename__ = "base_widgets"
 
-    id: Mapped[int] = mapped_column(primary_key=True, init=False)
-    name: Mapped[str] = mapped_column()
-
-
-class TypeMapEvent(Base):
-    __tablename__ = "base_type_map_events"
-
-    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
     created_at: Mapped[datetime] = mapped_column()
 
 
@@ -44,6 +37,41 @@ class ConventionChild(Base):
     )
 
 
+class DataclassWidget(DataclassBase):
+    __tablename__ = "dataclass_base_widgets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    name: Mapped[str] = mapped_column()
+
+
+def test_base_is_not_dataclass() -> None:
+    assert dataclasses.is_dataclass(BaseWidget) is False
+
+
+def test_base_type_annotation_map_is_configured() -> None:
+    assert {datetime: DateTimeUTC} == TYPE_ANNOTATION_MAP
+    assert Base.type_annotation_map is TYPE_ANNOTATION_MAP
+
+    column = BaseWidget.__table__.c.created_at
+    assert isinstance(column.type, DateTimeUTC)
+
+
+def test_base_naming_convention_is_applied_to_constraints() -> None:
+    assert Base.metadata.naming_convention == NAMING_CONVENTION
+
+    table = cast("Table", ConventionChild.__table__)
+    assert table.primary_key.name == "pk_base_convention_children"
+
+    unique_constraint = next(constraint for constraint in table.constraints if isinstance(constraint, UniqueConstraint))
+    assert unique_constraint.name == "uq_base_convention_children_code"
+
+    check_constraint = next(constraint for constraint in table.constraints if isinstance(constraint, CheckConstraint))
+    assert check_constraint.name == "ck_base_convention_children_code_length"
+
+    fk_constraint = next(iter(table.foreign_key_constraints))
+    assert fk_constraint.name == "fk_base_convention_children_parent_id_base_convention_parents"
+
+
 def test_dataclass_base_kwargs_are_applied() -> None:
     assert DataclassBase.__sa_dataclass_kwargs__ == {"kw_only": True, "repr": True, "eq": True}
     assert dataclasses.is_dataclass(DataclassWidget) is True
@@ -63,25 +91,5 @@ def test_dataclass_base_kwargs_are_applied() -> None:
         DataclassWidget("widget")
 
 
-def test_type_annotation_map_is_configured() -> None:
-    assert {datetime: DateTimeUTC} == TYPE_ANNOTATION_MAP
-    assert Base.type_annotation_map is TYPE_ANNOTATION_MAP
-
-    column = TypeMapEvent.__table__.c.created_at
-    assert isinstance(column.type, DateTimeUTC)
-
-
-def test_naming_convention_is_applied_to_constraints() -> None:
-    assert Base.metadata.naming_convention == NAMING_CONVENTION
-
-    table = cast("Table", ConventionChild.__table__)
-    assert table.primary_key.name == "pk_base_convention_children"
-
-    unique_constraint = next(constraint for constraint in table.constraints if isinstance(constraint, UniqueConstraint))
-    assert unique_constraint.name == "uq_base_convention_children_code"
-
-    check_constraint = next(constraint for constraint in table.constraints if isinstance(constraint, CheckConstraint))
-    assert check_constraint.name == "ck_base_convention_children_code_length"
-
-    fk_constraint = next(iter(table.foreign_key_constraints))
-    assert fk_constraint.name == "fk_base_convention_children_parent_id_base_convention_parents"
+def test_dataclass_base_uses_base_metadata() -> None:
+    assert DataclassBase.metadata is Base.metadata

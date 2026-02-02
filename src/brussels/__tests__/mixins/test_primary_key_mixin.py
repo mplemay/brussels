@@ -7,11 +7,11 @@ from sqlalchemy import Table, create_engine
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from brussels.base import Base
+from brussels.base import DataclassBase
 from brussels.mixins import PrimaryKeyMixin, TimestampMixin
 
 
-class Widget(Base, PrimaryKeyMixin, TimestampMixin):
+class Widget(DataclassBase, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "primary_key_widgets"
 
     name: Mapped[str] = mapped_column()
@@ -42,7 +42,7 @@ def test_id_not_in_init_signature() -> None:
 
 def test_id_default_factory_generates_uuid_on_flush() -> None:
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")

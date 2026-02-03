@@ -1,22 +1,30 @@
 import inspect
 import time
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, Session, mapped_column
+import pytest
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
+from brussels.base import DataclassBase
 from brussels.mixins import PrimaryKeyMixin, TimestampMixin
 from brussels.types import DateTimeUTC
 
 
-class Base(MappedAsDataclass, DeclarativeBase):
-    pass
-
-
-class Widget(Base, PrimaryKeyMixin, TimestampMixin):
-    __tablename__ = "widgets"
+class Widget(DataclassBase, PrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "timestamp_widgets"
 
     name: Mapped[str] = mapped_column()
+
+
+@pytest.fixture
+def engine() -> Iterator[Engine]:
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 def assert_is_utc(value: datetime) -> None:
@@ -52,9 +60,8 @@ def test_timestamps_not_in_init_signature() -> None:
     assert "deleted_at" not in signature.parameters
 
 
-def test_timestamps_populated_on_insert() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+def test_timestamps_populated_on_insert(engine: Engine) -> None:
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")
@@ -68,9 +75,8 @@ def test_timestamps_populated_on_insert() -> None:
         assert_is_utc(widget.updated_at)
 
 
-def test_updated_at_changes_on_update() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+def test_updated_at_changes_on_update(engine: Engine) -> None:
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")
@@ -88,9 +94,8 @@ def test_updated_at_changes_on_update() -> None:
         assert_is_utc(widget.updated_at)
 
 
-def test_mark_deleted_sets_deleted_at() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+def test_mark_deleted_sets_deleted_at(engine: Engine) -> None:
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")

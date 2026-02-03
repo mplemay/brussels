@@ -1,23 +1,30 @@
 import inspect
+from collections.abc import Iterator
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Table, create_engine
+from sqlalchemy import Engine, Table, create_engine
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
+from brussels.base import DataclassBase
 from brussels.mixins import PrimaryKeyMixin, TimestampMixin
 
 
-class Base(MappedAsDataclass, DeclarativeBase):
-    pass
-
-
-class Widget(Base, PrimaryKeyMixin, TimestampMixin):
-    __tablename__ = "widgets"
+class Widget(DataclassBase, PrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "primary_key_widgets"
 
     name: Mapped[str] = mapped_column()
+
+
+@pytest.fixture
+def engine() -> Iterator[Engine]:
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 def test_id_column_definition() -> None:
@@ -43,9 +50,8 @@ def test_id_not_in_init_signature() -> None:
         widget_cls(id=uuid4(), name="widget")
 
 
-def test_id_default_factory_generates_uuid_on_flush() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+def test_id_default_factory_generates_uuid_on_flush(engine: Engine) -> None:
+    DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
         widget = Widget(name="widget")

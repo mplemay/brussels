@@ -9,15 +9,15 @@ class PrimaryKeyMixin(MappedAsDataclass):
     """Mixin that adds a UUID primary key column.
 
     Inherits from MappedAsDataclass to support standalone usage without Base.
-    When used with Base (which also inherits MappedAsDataclass), the duplicate
-    inheritance is safely handled by Python's MRO (Method Resolution Order).
+    When used with DataclassBase (which also inherits MappedAsDataclass), the
+    duplicate inheritance is safely handled by Python's MRO (Method Resolution Order).
 
     The id field is excluded from __init__ (init=False) and is automatically
     generated both client-side (default_factory=uuid4) and server-side
     (server_default=gen_random_uuid()) for maximum compatibility.
 
     Usage:
-        class MyModel(Base, PrimaryKeyMixin, TimestampMixin):
+        class MyModel(DataclassBase, PrimaryKeyMixin, TimestampMixin):
             __tablename__ = "my_table"
             name: Mapped[str]
 

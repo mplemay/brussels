@@ -11,14 +11,14 @@ class TimestampMixin(MappedAsDataclass):
     """Mixin that adds automatic timestamp tracking columns.
 
     Inherits from MappedAsDataclass to support standalone usage without Base.
-    When used with Base (which also inherits MappedAsDataclass), the duplicate
-    inheritance is safely handled by Python's MRO (Method Resolution Order).
+    When used with DataclassBase (which also inherits MappedAsDataclass), the
+    duplicate inheritance is safely handled by Python's MRO (Method Resolution Order).
 
     All timestamp fields are excluded from __init__ (init=False) and are
     automatically managed by the database using UTC-aware datetimes.
 
     Usage:
-        class MyModel(Base, PrimaryKeyMixin, TimestampMixin):
+        class MyModel(DataclassBase, PrimaryKeyMixin, TimestampMixin):
             __tablename__ = "my_table"
             name: Mapped[str]
 

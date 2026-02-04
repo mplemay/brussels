@@ -38,7 +38,7 @@ def test_id_column_definition() -> None:
     server_default = column.server_default
     assert server_default is not None
     compiled = cast("Any", server_default).arg.compile(dialect=postgresql.dialect())
-    assert "gen_random_uuid" in str(compiled)
+    assert "uuidv7" in str(compiled)
 
 
 def test_id_not_in_init_signature() -> None:
@@ -50,7 +50,7 @@ def test_id_not_in_init_signature() -> None:
         widget_cls(id=uuid4(), name="widget")
 
 
-def test_id_default_factory_generates_uuid_on_flush(engine: Engine) -> None:
+def test_id_generated_for_sqlite_on_flush(engine: Engine) -> None:
     DataclassBase.metadata.create_all(engine)
 
     with Session(engine) as session:
@@ -59,3 +59,4 @@ def test_id_default_factory_generates_uuid_on_flush(engine: Engine) -> None:
         session.flush()
 
         assert isinstance(widget.id, UUID)
+        assert widget.id.version == 4

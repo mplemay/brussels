@@ -19,8 +19,9 @@ TYPE_ANNOTATION_MAP: Final[dict[type | Any, object]] = {
     datetime: DateTimeUTC,
 }
 
-TABLENAME_CAPITAL_RUN_PATTERN: Final = re.compile(r"(?<=[A-Z]{2})([A-Z][a-z])")
-TABLENAME_BOUNDARY_PATTERN: Final = re.compile(r"(?<=[a-z0-9])([A-Z])")
+TABLENAME_CAPITAL_RUN_PATTERN: Final[re.Pattern] = re.compile(r"(?<=[A-Z]{2})([A-Z][a-z])")
+TABLENAME_LOWER_UPPER_PATTERN: Final[re.Pattern] = re.compile(r"(?<=[a-z])([A-Z])")
+TABLENAME_ALPHA_DIGIT_PATTERN: Final[re.Pattern] = re.compile(r"(?<=[A-Za-z])([0-9])")
 
 
 class Base(DeclarativeBase):
@@ -31,7 +32,8 @@ class Base(DeclarativeBase):
     @declared_attr.directive
     def __tablename__(self) -> str:
         name = TABLENAME_CAPITAL_RUN_PATTERN.sub(r"_\1", self.__name__)
-        return TABLENAME_BOUNDARY_PATTERN.sub(r"_\1", name).lower()
+        name = TABLENAME_LOWER_UPPER_PATTERN.sub(r"_\1", name)
+        return TABLENAME_ALPHA_DIGIT_PATTERN.sub(r"_\1", name).lower()
 
 
 class DataclassBase(MappedAsDataclass, Base):

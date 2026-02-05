@@ -111,8 +111,8 @@ def test_dataclass_base_uses_base_metadata() -> None:
 
 def test_base_handles_acronyms_and_digits() -> None:
     assert OAuthToken.__tablename__ == "oauth_token"
-    assert JSON2XML.__tablename__ == "json2_xml"
-    assert My2FAThing.__tablename__ == "my2_fa_thing"
+    assert JSON2XML.__tablename__ == "json_2xml"
+    assert My2FAThing.__tablename__ == "my_2fa_thing"
 
 
 def test_base_allows_explicit_tablename_override() -> None:

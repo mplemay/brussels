@@ -12,23 +12,17 @@ from brussels.types import DateTimeUTC
 
 
 class BaseWidget(Base):
-    __tablename__ = "base_widgets"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     created_at: Mapped[datetime] = mapped_column()
 
 
 class ConventionParent(Base):
-    __tablename__ = "base_convention_parents"
-
     id: Mapped[int] = mapped_column(primary_key=True)
 
 
 class ConventionChild(Base):
-    __tablename__ = "base_convention_children"
-
     id: Mapped[int] = mapped_column(primary_key=True)
-    parent_id: Mapped[int] = mapped_column(ForeignKey("base_convention_parents.id"))
+    parent_id: Mapped[int] = mapped_column(ForeignKey("convention_parent.id"))
     code: Mapped[str] = mapped_column()
 
     __table_args__ = (
@@ -38,14 +32,35 @@ class ConventionChild(Base):
 
 
 class DataclassWidget(DataclassBase, kw_only=True, repr=False, eq=False):
-    __tablename__ = "dataclass_base_widgets"
-
     id: Mapped[int] = mapped_column(primary_key=True, init=False)
     name: Mapped[str] = mapped_column()
 
 
+class OAuthToken(Base):
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+
+class JSON2XML(Base):
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+
+class My2FAThing(Base):
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+
+class ExplicitTable(Base):
+    __tablename__ = "explicit_table"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+
 def test_base_is_not_dataclass() -> None:
     assert dataclasses.is_dataclass(BaseWidget) is False
+
+
+def test_base_uses_auto_tablename_snake_case() -> None:
+    assert BaseWidget.__tablename__ == "base_widget"
+    assert DataclassWidget.__tablename__ == "dataclass_widget"
 
 
 def test_base_type_annotation_map_is_configured() -> None:
@@ -60,16 +75,16 @@ def test_base_naming_convention_is_applied_to_constraints() -> None:
     assert Base.metadata.naming_convention == NAMING_CONVENTION
 
     table = cast("Table", ConventionChild.__table__)
-    assert table.primary_key.name == "pk_base_convention_children"
+    assert table.primary_key.name == "pk_convention_child"
 
     unique_constraint = next(constraint for constraint in table.constraints if isinstance(constraint, UniqueConstraint))
-    assert unique_constraint.name == "uq_base_convention_children_code"
+    assert unique_constraint.name == "uq_convention_child_code"
 
     check_constraint = next(constraint for constraint in table.constraints if isinstance(constraint, CheckConstraint))
-    assert check_constraint.name == "ck_base_convention_children_code_length"
+    assert check_constraint.name == "ck_convention_child_code_length"
 
     fk_constraint = next(iter(table.foreign_key_constraints))
-    assert fk_constraint.name == "fk_base_convention_children_parent_id_base_convention_parents"
+    assert fk_constraint.name == "fk_convention_child_parent_id_convention_parent"
 
 
 def test_dataclass_base_kwargs_are_applied() -> None:
@@ -92,3 +107,15 @@ def test_dataclass_base_kwargs_are_applied() -> None:
 
 def test_dataclass_base_uses_base_metadata() -> None:
     assert DataclassBase.metadata is Base.metadata
+
+
+def test_base_handles_acronyms_and_digits() -> None:
+    assert OAuthToken.__tablename__ == "oauth_token"
+    assert JSON2XML.__tablename__ == "json_2xml"
+    assert My2FAThing.__tablename__ == "my_2fa_thing"
+
+
+def test_base_allows_explicit_tablename_override() -> None:
+    assert ExplicitTable.__tablename__ == "explicit_table"
+    table = cast("Table", ExplicitTable.__table__)
+    assert table.name == "explicit_table"

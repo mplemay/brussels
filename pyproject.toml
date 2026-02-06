@@ -15,6 +15,9 @@ dependencies = [
 encrypted = [
     "cryptography>=46.0.4",
 ]
+alembic = [
+    "alembic-postgresql-enum",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.28,<0.10.0"]
@@ -33,6 +36,10 @@ dev = [
     "ruff>=0.14.5",
     "rumdl",
     "ty>=0.0.1a27",
+]
+all = [
+    "alembic-postgresql-enum",
+    "cryptography>=46.0.4",
 ]
 
 [tool.uv.build-backend]

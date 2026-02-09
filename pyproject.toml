@@ -20,6 +20,7 @@ alembic = [
 ]
 files = [
     "obstore",
+    "pydantic>=2,<3",
 ]
 
 [build-system]
@@ -44,6 +45,7 @@ all = [
     "alembic-postgresql-enum",
     "cryptography>=46.0.4",
     "obstore",
+    "pydantic>=2,<3",
 ]
 
 [tool.uv.build-backend]

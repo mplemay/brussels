@@ -2,16 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from brussels import files
-from brussels.files.facade import HAS_OBSTORE, RemoteFileFacade
-from brussels.types import RemoteFileMetadata, UploadStatus
+try:
+    from brussels import files
+    from brussels.files.facade import HAS_OBSTORE, RemoteFileFacade
+    from brussels.types import RemoteFile, RemoteFileMetadata, UploadStatus
+except ModuleNotFoundError:
+    pytest.skip("files optional dependencies not installed", allow_module_level=True)
+
+if TYPE_CHECKING:
+    from uuid import UUID
 
 
 @dataclass
 class FileModel:
+    id: str | int | UUID
+    file: RemoteFileMetadata | None = None
+
+
+@dataclass
+class MissingIdModel:
+    id: None = None
     file: RemoteFileMetadata | None = None
 
 
@@ -118,13 +132,13 @@ def _clock(values: list[datetime]):
 async def test_upload_success_updates_metadata_and_never_commits() -> None:
     store = object()
     store_ops = FakeStoreOps()
-    model = FileModel()
+    model = FileModel(id="user-123")
     session = SyncSessionSpy()
-    facade = RemoteFileFacade(
+    remote_file = RemoteFile(
         store=store,
         store_ops=store_ops,
         key_prefix="uploads",
-        key_factory=lambda _filename: "generated.txt",
+        key_factory=lambda model_id, _filename: f"{model_id}/generated.txt",
         now=_clock(
             [
                 datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
@@ -132,12 +146,12 @@ async def test_upload_success_updates_metadata_and_never_commits() -> None:
             ],
         ),
     )
+    facade = RemoteFileFacade(remote_file=remote_file)
 
     metadata = await facade.upload(
         model=model,
         field_name="file",
         data=b"hello",
-        store_name="s3",
         bucket="uploads-bucket",
         filename="hello.txt",
         content_type="text/plain",
@@ -146,7 +160,7 @@ async def test_upload_success_updates_metadata_and_never_commits() -> None:
     )
 
     assert metadata.status is UploadStatus.COMPLETE
-    assert metadata.key == "uploads/generated.txt"
+    assert metadata.key == "uploads/user-123/generated.txt"
     assert metadata.size_bytes == 5
     assert metadata.content_type == "text/plain"
     assert metadata.etag == "etag-123"
@@ -159,7 +173,7 @@ async def test_upload_success_updates_metadata_and_never_commits() -> None:
     operation, called_store, args, kwargs = store_ops.calls[0]
     assert operation == "put"
     assert called_store is store
-    assert args[0] == "uploads/generated.txt"
+    assert args[0] == "uploads/user-123/generated.txt"
     assert args[1] == b"hello"
     assert kwargs["content_type"] == "text/plain"
 
@@ -168,12 +182,12 @@ async def test_upload_success_updates_metadata_and_never_commits() -> None:
 async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
     store_ops = FakeStoreOps()
     store_ops.put_error = RuntimeError("upload failed")
-    model = FileModel()
+    model = FileModel(id=42)
     session = AsyncSessionSpy()
-    facade = RemoteFileFacade(
+    remote_file = RemoteFile(
         store=object(),
         store_ops=store_ops,
-        key_factory=lambda _filename: "generated.txt",
+        key_factory=lambda model_id, _filename: f"{model_id}/generated.txt",
         now=_clock(
             [
                 datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
@@ -181,13 +195,13 @@ async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
             ],
         ),
     )
+    facade = RemoteFileFacade(remote_file=remote_file)
 
     with pytest.raises(RuntimeError, match="upload failed"):
         await facade.upload(
             model=model,
             field_name="file",
             data=b"boom",
-            store_name="s3",
             session=session,  # type: ignore[arg-type]
             flush=True,
         )
@@ -200,22 +214,31 @@ async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_requires_model_id() -> None:
+    facade = RemoteFileFacade(remote_file=RemoteFile(store=object(), store_ops=FakeStoreOps()))
+    model = MissingIdModel()
+
+    with pytest.raises(ValueError, match=r"model\.id"):
+        await facade.upload(model=cast("object", model), field_name="file", data=b"data")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
 async def test_download_read_range_and_delete_file_use_metadata_key() -> None:
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     metadata = RemoteFileMetadata(
-        store_name="s3",
         key="folder/item.txt",
         status=UploadStatus.COMPLETE,
         created_at=now,
         updated_at=now,
     )
-    model = FileModel(file=metadata)
+    model = FileModel(id="abc", file=metadata)
     store_ops = FakeStoreOps()
-    facade = RemoteFileFacade(
+    remote_file = RemoteFile(
         store=object(),
         store_ops=store_ops,
         now=_clock([datetime(2025, 1, 1, 12, 1, tzinfo=UTC)]),
     )
+    facade = RemoteFileFacade(remote_file=remote_file)
 
     downloaded = await facade.download(metadata)
     ranged = await facade.read_range(metadata, 0, 4)
@@ -235,7 +258,7 @@ async def test_download_read_range_and_delete_file_use_metadata_key() -> None:
 @pytest.mark.asyncio
 async def test_all_wrapper_methods_call_obstore_operations() -> None:
     store_ops = FakeStoreOps()
-    facade = RemoteFileFacade(store=object(), store_ops=store_ops)
+    facade = RemoteFileFacade(remote_file=RemoteFile(store=object(), store_ops=store_ops))
 
     await facade.put("a", b"b")
     await facade.put_multipart("a", b"b")

@@ -3,8 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from brussels.files import find_cleanup_candidates, is_cleanup_candidate
-from brussels.types import RemoteFileMetadata, UploadStatus
+import pytest
+
+try:
+    from brussels.files import find_cleanup_candidates, is_cleanup_candidate
+    from brussels.types import RemoteFileMetadata, UploadStatus
+except ModuleNotFoundError:
+    pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
 
 @dataclass
@@ -14,7 +19,6 @@ class Row:
 
 def _metadata(*, status: UploadStatus, updated_at: datetime) -> RemoteFileMetadata:
     return RemoteFileMetadata(
-        store_name="s3",
         key="folder/item.txt",
         status=status,
         created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),

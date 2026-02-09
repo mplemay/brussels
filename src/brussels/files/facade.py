@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import replace
-from datetime import UTC, datetime
 from importlib import import_module
 from inspect import isawaitable
-from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
-from uuid import uuid4
+from uuid import UUID
 
-from brussels.types import RemoteFileMetadata, UploadStatus
+from brussels.types import RemoteFile, RemoteFileMetadata, UploadStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
+
+
+class SupportsFileId(Protocol):
+    id: str | int | UUID
 
 
 class _StoreOps(Protocol):
@@ -47,17 +45,6 @@ def _load_obstore_store() -> _StoreOps | None:
 _obstore_store = _load_obstore_store()
 
 HAS_OBSTORE = _obstore_store is not None
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _default_key_factory(filename: str | None) -> str:
-    suffix = ""
-    if filename is not None:
-        suffix = Path(filename).suffix.lower()
-    return f"{uuid4().hex}{suffix}"
 
 
 def _extract_value(result: object, *field_names: str) -> object | None:
@@ -98,39 +85,62 @@ def _extract_optional_int(result: object, *field_names: str) -> int | None:
 
 
 class RemoteFileFacade:
-    def __init__(
-        self,
-        *,
-        store: object,
-        key_prefix: str | None = None,
-        now: Callable[[], datetime] | None = None,
-        key_factory: Callable[[str | None], str] | None = None,
-        store_ops: object | None = None,
-    ) -> None:
-        self._store = store
-        self._key_prefix = key_prefix.strip("/") if key_prefix is not None else ""
-        self._now = now or _utc_now
-        self._key_factory = key_factory or _default_key_factory
+    def __init__(self, *, remote_file: RemoteFile | None = None) -> None:
+        self._remote_file = remote_file
 
-        if store_ops is not None:
-            self._store_ops = cast("_StoreOps", store_ops)
-            return
+    def _resolve_remote_file(self, *, model: object | None = None, field_name: str | None = None) -> RemoteFile:
+        if self._remote_file is not None:
+            return self._remote_file
+
+        if model is None or field_name is None:
+            msg = "RemoteFileFacade requires a bound RemoteFile in the constructor for direct store operations."
+            raise ValueError(msg)
+
+        table = getattr(type(model), "__table__", None)
+        if table is None:
+            msg = "RemoteFileFacade requires SQLAlchemy model instances with __table__ metadata."
+            raise TypeError(msg)
+
+        if field_name not in table.c:
+            msg = f"Model does not define column '{field_name}'."
+            raise ValueError(msg)
+
+        column_type = table.c[field_name].type
+        if not isinstance(column_type, RemoteFile):
+            msg = f"Model column '{field_name}' must use brussels.types.RemoteFile."
+            raise TypeError(msg)
+        return column_type
+
+    def _resolve_store_ops(self, remote_file: RemoteFile) -> _StoreOps:
+        if remote_file.store_ops is not None:
+            return cast("_StoreOps", remote_file.store_ops)
         if _obstore_store is not None:
-            self._store_ops = _obstore_store
-            return
-
+            return _obstore_store
         msg = "RemoteFileFacade requires the optional dependency 'obstore'. Install with `pip install brussels[files]`."
         raise ModuleNotFoundError(msg)
 
-    def _with_prefix(self, key: str) -> str:
-        if self._key_prefix == "":
-            return key
-        return f"{self._key_prefix}/{key}"
+    @staticmethod
+    def _model_id(model: SupportsFileId) -> str:
+        model_id = getattr(model, "id", None)
+        if model_id is None:
+            msg = "RemoteFile operations require model.id to be set."
+            raise ValueError(msg)
+        if not isinstance(model_id, str | int | UUID):
+            type_name = type(model_id).__name__
+            msg = f"Model id must be str, int, or UUID, got {type_name}."
+            raise TypeError(msg)
+        return str(model_id)
 
-    def _build_key(self, filename: str | None) -> str:
-        return self._with_prefix(self._key_factory(filename))
+    @staticmethod
+    async def _flush(*, session: Session | AsyncSession | None, flush: bool) -> None:
+        if not flush or session is None:
+            return
+        maybe_awaitable = session.flush()
+        if isawaitable(maybe_awaitable):
+            await maybe_awaitable
 
-    def _get_metadata(self, *, model: object, field_name: str) -> RemoteFileMetadata | None:
+    @staticmethod
+    def _get_metadata(*, model: object, field_name: str) -> RemoteFileMetadata | None:
         value = getattr(model, field_name)
         if value is None:
             return None
@@ -144,19 +154,11 @@ class RemoteFileFacade:
         msg = f"Model field '{field_name}' must hold RemoteFileMetadata | dict | None, got {type_name}."
         raise TypeError(msg)
 
-    async def _flush(self, *, session: Session | AsyncSession | None, flush: bool) -> None:
-        if not flush or session is None:
-            return
-        maybe_awaitable = session.flush()
-        if isawaitable(maybe_awaitable):
-            await maybe_awaitable
-
     async def create_pending(  # noqa: PLR0913
         self,
         *,
-        model: object,
+        model: SupportsFileId,
         field_name: str,
-        store_name: str,
         bucket: str | None = None,
         key: str | None = None,
         url: str | None = None,
@@ -165,11 +167,11 @@ class RemoteFileFacade:
         session: Session | AsyncSession | None = None,
         flush: bool = False,
     ) -> RemoteFileMetadata:
-        now = self._now()
+        remote_file = self._resolve_remote_file(model=model, field_name=field_name)
+        now = remote_file.now()
         metadata = RemoteFileMetadata(
-            store_name=store_name,
             bucket=bucket,
-            key=key or self._build_key(filename),
+            key=key or remote_file.build_key(model_id=self._model_id(model), filename=filename),
             url=url,
             status=UploadStatus.PENDING,
             content_type=content_type,
@@ -183,10 +185,9 @@ class RemoteFileFacade:
     async def upload(  # noqa: PLR0913
         self,
         *,
-        model: object,
+        model: SupportsFileId,
         field_name: str,
         data: object,
-        store_name: str,
         bucket: str | None = None,
         key: str | None = None,
         url: str | None = None,
@@ -196,12 +197,12 @@ class RemoteFileFacade:
         flush: bool = False,
         **put_kwargs: object,
     ) -> RemoteFileMetadata:
+        remote_file = self._resolve_remote_file(model=model, field_name=field_name)
         metadata = self._get_metadata(model=model, field_name=field_name)
         if metadata is None:
             metadata = await self.create_pending(
                 model=model,
                 field_name=field_name,
-                store_name=store_name,
                 bucket=bucket,
                 key=key,
                 url=url,
@@ -211,18 +212,18 @@ class RemoteFileFacade:
                 flush=flush,
             )
         else:
-            update_now = self._now()
-            metadata = replace(
-                metadata,
-                store_name=store_name,
-                bucket=bucket,
-                key=key or metadata.key,
-                url=url or metadata.url,
-                status=UploadStatus.PENDING,
-                content_type=content_type or metadata.content_type,
-                updated_at=update_now,
-                uploaded_at=None,
-                error_message=None,
+            update_now = remote_file.now()
+            metadata = metadata.model_copy(
+                update={
+                    "bucket": bucket,
+                    "key": key or metadata.key,
+                    "url": url or metadata.url,
+                    "status": UploadStatus.PENDING,
+                    "content_type": content_type or metadata.content_type,
+                    "updated_at": update_now,
+                    "uploaded_at": None,
+                    "error_message": None,
+                },
             )
             setattr(model, field_name, metadata)
             await self._flush(session=session, flush=flush)
@@ -231,19 +232,20 @@ class RemoteFileFacade:
             put_kwargs["content_type"] = content_type
 
         try:
-            result = await self.put(metadata.key, data, **put_kwargs)
+            result = await self.put(metadata.key, data, remote_file=remote_file, **put_kwargs)
         except Exception as exc:
-            failed_metadata = replace(
-                metadata,
-                status=UploadStatus.FAILED,
-                updated_at=self._now(),
-                error_message=str(exc),
+            failed_metadata = metadata.model_copy(
+                update={
+                    "status": UploadStatus.FAILED,
+                    "updated_at": remote_file.now(),
+                    "error_message": str(exc),
+                },
             )
             setattr(model, field_name, failed_metadata)
             await self._flush(session=session, flush=flush)
             raise
 
-        finished_at = self._now()
+        finished_at = remote_file.now()
         size_bytes = _extract_optional_int(result, "size_bytes", "size", "bytes")
         if size_bytes is None:
             size_bytes = metadata.size_bytes
@@ -260,92 +262,187 @@ class RemoteFileFacade:
         if version is None:
             version = metadata.version
 
-        completed_metadata = replace(
-            metadata,
-            status=UploadStatus.COMPLETE,
-            size_bytes=size_bytes,
-            content_type=result_content_type,
-            etag=etag,
-            checksum=checksum,
-            version=version,
-            updated_at=finished_at,
-            uploaded_at=finished_at,
-            error_message=None,
+        completed_metadata = metadata.model_copy(
+            update={
+                "status": UploadStatus.COMPLETE,
+                "size_bytes": size_bytes,
+                "content_type": result_content_type,
+                "etag": etag,
+                "checksum": checksum,
+                "version": version,
+                "updated_at": finished_at,
+                "uploaded_at": finished_at,
+                "error_message": None,
+            },
         )
         setattr(model, field_name, completed_metadata)
         await self._flush(session=session, flush=flush)
         return completed_metadata
 
-    async def download(self, metadata: RemoteFileMetadata, **kwargs: object) -> object:
-        return await self.get(metadata.key, **kwargs)
+    async def download(
+        self,
+        metadata: RemoteFileMetadata,
+        *,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        return await self.get(metadata.key, remote_file=remote_file, **kwargs)
 
     async def read_range(
         self,
         metadata: RemoteFileMetadata,
         start: int,
         end: int,
+        *,
+        remote_file: RemoteFile | None = None,
         **kwargs: object,
     ) -> object:
-        return await self.get_range(metadata.key, start, end, **kwargs)
+        return await self.get_range(metadata.key, start, end, remote_file=remote_file, **kwargs)
 
     async def delete_file(
         self,
         *,
-        model: object,
+        model: SupportsFileId,
         field_name: str,
         session: Session | AsyncSession | None = None,
         flush: bool = False,
         delete_remote: bool = True,
         **delete_kwargs: object,
     ) -> RemoteFileMetadata | None:
+        remote_file = self._resolve_remote_file(model=model, field_name=field_name)
         metadata = self._get_metadata(model=model, field_name=field_name)
         if metadata is None:
             return None
         if delete_remote:
-            await self.delete(metadata.key, **delete_kwargs)
+            await self.delete(metadata.key, remote_file=remote_file, **delete_kwargs)
 
-        deleted_metadata = replace(
-            metadata,
-            status=UploadStatus.DELETED,
-            updated_at=self._now(),
-            error_message=None,
+        deleted_metadata = metadata.model_copy(
+            update={
+                "status": UploadStatus.DELETED,
+                "updated_at": remote_file.now(),
+                "error_message": None,
+            },
         )
         setattr(model, field_name, deleted_metadata)
         await self._flush(session=session, flush=flush)
         return deleted_metadata
 
-    async def put(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.put(self._store, *args, **kwargs)
+    async def put(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.put(resolved_remote_file.store, *args, **kwargs)
 
-    async def put_multipart(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.put_multipart(self._store, *args, **kwargs)
+    async def put_multipart(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.put_multipart(resolved_remote_file.store, *args, **kwargs)
 
-    async def get(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.get(self._store, *args, **kwargs)
+    async def get(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.get(resolved_remote_file.store, *args, **kwargs)
 
-    async def get_range(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.get_range(self._store, *args, **kwargs)
+    async def get_range(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.get_range(resolved_remote_file.store, *args, **kwargs)
 
-    async def head(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.head(self._store, *args, **kwargs)
+    async def head(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.head(resolved_remote_file.store, *args, **kwargs)
 
-    async def list(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.list(self._store, *args, **kwargs)
+    async def list(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.list(resolved_remote_file.store, *args, **kwargs)
 
-    async def list_with_delimiter(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.list_with_delimiter(self._store, *args, **kwargs)
+    async def list_with_delimiter(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.list_with_delimiter(resolved_remote_file.store, *args, **kwargs)
 
-    async def delete(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.delete(self._store, *args, **kwargs)
+    async def delete(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.delete(resolved_remote_file.store, *args, **kwargs)
 
-    async def copy(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.copy(self._store, *args, **kwargs)
+    async def copy(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.copy(resolved_remote_file.store, *args, **kwargs)
 
-    async def rename(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.rename(self._store, *args, **kwargs)
+    async def rename(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.rename(resolved_remote_file.store, *args, **kwargs)
 
-    async def sign(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.sign(self._store, *args, **kwargs)
+    async def sign(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.sign(resolved_remote_file.store, *args, **kwargs)
 
-    async def attributes(self, *args: object, **kwargs: object) -> object:
-        return await self._store_ops.attributes(self._store, *args, **kwargs)
+    async def attributes(
+        self,
+        *args: object,
+        remote_file: RemoteFile | None = None,
+        **kwargs: object,
+    ) -> object:
+        resolved_remote_file = remote_file or self._resolve_remote_file()
+        store_ops = self._resolve_store_ops(resolved_remote_file)
+        return await store_ops.attributes(resolved_remote_file.store, *args, **kwargs)

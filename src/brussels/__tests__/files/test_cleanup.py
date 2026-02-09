@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from brussels.files import find_cleanup_candidates, is_cleanup_candidate
+from brussels.types import RemoteFileMetadata, UploadStatus
+
+
+@dataclass
+class Row:
+    file: RemoteFileMetadata | None
+
+
+def _metadata(*, status: UploadStatus, updated_at: datetime) -> RemoteFileMetadata:
+    return RemoteFileMetadata(
+        store_name="s3",
+        key="folder/item.txt",
+        status=status,
+        created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+        updated_at=updated_at,
+    )
+
+
+def test_is_cleanup_candidate_true_for_stale_pending() -> None:
+    now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    metadata = _metadata(
+        status=UploadStatus.PENDING,
+        updated_at=datetime(2025, 1, 1, 11, 0, tzinfo=UTC),
+    )
+
+    result = is_cleanup_candidate(metadata, now=now, stale_after=timedelta(minutes=30))
+
+    assert result is True
+
+
+def test_is_cleanup_candidate_false_for_complete_or_recent_pending() -> None:
+    now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    complete = _metadata(
+        status=UploadStatus.COMPLETE,
+        updated_at=datetime(2025, 1, 1, 10, 0, tzinfo=UTC),
+    )
+    recent_pending = _metadata(
+        status=UploadStatus.PENDING,
+        updated_at=datetime(2025, 1, 1, 11, 50, tzinfo=UTC),
+    )
+
+    assert is_cleanup_candidate(complete, now=now, stale_after=timedelta(minutes=30)) is False
+    assert is_cleanup_candidate(recent_pending, now=now, stale_after=timedelta(minutes=30)) is False
+
+
+def test_find_cleanup_candidates_filters_stale_incomplete_rows() -> None:
+    now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    rows = [
+        Row(file=_metadata(status=UploadStatus.PENDING, updated_at=datetime(2025, 1, 1, 10, 0, tzinfo=UTC))),
+        Row(file=_metadata(status=UploadStatus.FAILED, updated_at=datetime(2025, 1, 1, 10, 30, tzinfo=UTC))),
+        Row(file=_metadata(status=UploadStatus.COMPLETE, updated_at=datetime(2025, 1, 1, 9, 0, tzinfo=UTC))),
+        Row(file=_metadata(status=UploadStatus.PENDING, updated_at=datetime(2025, 1, 1, 11, 59, tzinfo=UTC))),
+        Row(file=None),
+    ]
+
+    candidates = find_cleanup_candidates(
+        rows,
+        extractor=lambda row: row.file,
+        now=now,
+        stale_after=timedelta(minutes=45),
+    )
+
+    assert len(candidates) == 2
+    assert candidates[0].file is not None
+    assert candidates[1].file is not None
+    assert candidates[0].file.status is UploadStatus.PENDING
+    assert candidates[1].file.status is UploadStatus.FAILED

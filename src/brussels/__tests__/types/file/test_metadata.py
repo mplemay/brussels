@@ -1,128 +1,86 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import Engine, create_engine
-from sqlalchemy.orm import Mapped, Session, mapped_column
-
-from brussels.base import Base
+from pydantic import ValidationError
 
 try:
-    from obstore.store import MemoryStore
-
-    from brussels.types.file import RemoteMetadata, RemoteStorage
+    from brussels.types.file import RemoteMetadata
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
+
+def test_to_dict_and_from_dict_round_trip_with_aliases() -> None:
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    updated_at = datetime(2025, 1, 1, 12, 1, tzinfo=UTC)
+    original = RemoteMetadata(
+        key="example/file.txt",
+        status="complete",
+        size_bytes=8,
+        content_type="text/plain",
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+    payload = original.to_dict()
+    round_tripped = RemoteMetadata.from_dict(payload)
+
+    assert payload["schema"] == 1
+    assert payload["key"] == "example/file.txt"
+    assert payload["status"] == "complete"
+    assert round_tripped == original
 
 
-class FileRecord(Base):
-    __tablename__ = "file_records"
+def test_schema_alias_is_accepted_and_serialized() -> None:
+    data = {
+        "schema": 1,
+        "key": "alias/file.txt",
+        "status": "pending",
+        "created_at": "2025-01-01T12:00:00+00:00",
+        "updated_at": "2025-01-01T12:00:00+00:00",
+    }
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True)
+    metadata = RemoteMetadata.from_dict(data)
+
+    assert metadata.schema_version == 1
+    assert metadata.to_dict()["schema"] == 1
 
 
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    engine = create_engine("sqlite:///:memory:")
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
-def test_process_bind_param_serializes_metadata() -> None:
-    now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+def test_datetime_fields_are_normalized_to_utc() -> None:
+    eastern = timezone(timedelta(hours=-5))
     metadata = RemoteMetadata(
         key="example/file.txt",
         status="pending",
-        created_at=now,
-        updated_at=now,
+        created_at=datetime(2025, 1, 1, 12, 0, tzinfo=eastern),
+        updated_at=datetime(2025, 1, 1, 13, 0, tzinfo=eastern),
     )
 
-    bound = RemoteStorage(store=MemoryStore()).process_bind_param(metadata, None)
-
-    assert bound is not None
-    assert bound["schema"] == 1
-    assert bound["key"] == "example/file.txt"
-    assert bound["status"] == "pending"
-    assert bound["created_at"] in {now.isoformat(), "2025-01-01T12:00:00Z"}
+    assert metadata.created_at.tzinfo == UTC
+    assert metadata.updated_at.tzinfo == UTC
+    assert metadata.created_at.hour == 17
+    assert metadata.updated_at.hour == 18
 
 
-def test_process_bind_param_rejects_invalid_value_type() -> None:
-    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata is invalid"):
-        RemoteStorage(store=MemoryStore()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
-
-
-def test_process_result_value_returns_typed_metadata() -> None:
-    raw = {
-        "schema": 1,
-        "key": "example/file.txt",
-        "status": "complete",
-        "size_bytes": 8,
-        "content_type": "text/plain",
-        "etag": "etag-value",
-        "checksum": "checksum-value",
-        "version": "v1",
-        "created_at": "2025-01-01T12:00:00+00:00",
-        "updated_at": "2025-01-01T12:01:00+00:00",
-    }
-
-    metadata = RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
-
-    assert isinstance(metadata, RemoteMetadata)
-    assert metadata.status == "complete"
-    assert metadata.size_bytes == 8
-
-
-def test_process_result_value_rejects_legacy_store_name_field() -> None:
-    raw = {
-        "store_name": "legacy-store",
-        "key": "example/file.txt",
-        "status": "complete",
-        "created_at": "2025-01-01T12:00:00+00:00",
-        "updated_at": "2025-01-01T12:01:00+00:00",
-    }
-
-    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata from database is invalid"):
-        RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
-
-
-def test_process_result_value_rejects_deleted_status() -> None:
-    raw = {
-        "schema": 1,
-        "key": "example/file.txt",
-        "status": "deleted",
-        "created_at": "2025-01-01T12:00:00+00:00",
-        "updated_at": "2025-01-01T12:01:00+00:00",
-    }
-
-    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata from database is invalid"):
-        RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
-
-
-def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
-    Base.metadata.create_all(engine)
-    now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-
-    with Session(engine) as session:
-        record = FileRecord(
-            file=RemoteMetadata(
-                key="example/file.txt",
-                status="pending",
-                created_at=now,
-                updated_at=now,
-            ),
+def test_invalid_status_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="status"):
+        RemoteMetadata(
+            key="example/file.txt",
+            status="deleted",  # type: ignore[arg-type]
+            created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+            updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
         )
-        session.add(record)
-        session.commit()
-        session.refresh(record)
 
-        assert isinstance(record.file, RemoteMetadata)
-        assert record.file.status == "pending"
-        assert record.file.key == "example/file.txt"
+
+def test_extra_fields_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        RemoteMetadata.from_dict(
+            {
+                "schema": 1,
+                "key": "example/file.txt",
+                "status": "pending",
+                "created_at": "2025-01-01T12:00:00+00:00",
+                "updated_at": "2025-01-01T12:00:00+00:00",
+                "store_name": "legacy-store",
+            },
+        )

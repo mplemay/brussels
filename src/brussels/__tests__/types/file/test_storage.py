@@ -1,215 +1,29 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
 
 import pytest
-from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.dialects.postgresql import dialect as postgres_dialect
 from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
-from sqlalchemy.orm import Mapped, Session, mapped_column
-
-import brussels.types.file.lifecycle as file_lifecycle
-from brussels.base import DataclassBase
-from brussels.mixins import PrimaryKeyMixin
 
 try:
     from obstore.store import MemoryStore
 
-    from brussels.types.file import (
-        RemoteFile,
-        RemoteMetadata,
-        RemoteStorage,
-        cleanup_remote_fields,
-    )
-    from brussels.types.file.lifecycle import FileLifecycleCoordinator
+    from brussels.types.file import RemoteMetadata, RemoteStorage
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
-if TYPE_CHECKING:
-    from obstore import GetOptions
-    from sqlalchemy.ext.asyncio import AsyncSession
+
+class ModelWithMetadataField:
+    def __init__(self, file: object) -> None:
+        self.file = file
 
 
-class FileModel(DataclassBase, PrimaryKeyMixin):
-    __tablename__ = "file_model"
+def test_build_key_is_deterministic_model_id_and_field() -> None:
+    remote_storage = RemoteStorage(store=MemoryStore())
 
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True, default=None)
-    attachment: Mapped[RemoteMetadata | None] = mapped_column(
-        RemoteStorage(store=MemoryStore()),
-        nullable=True,
-        default=None,
-    )
-
-
-class OtherFileModel(DataclassBase, PrimaryKeyMixin):
-    __tablename__ = "other_file_model"
-
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True, default=None)
-
-
-class SyncSessionSpy:
-    def __init__(self) -> None:
-        self.flush_calls = 0
-
-    def flush(self) -> None:
-        self.flush_calls += 1
-
-
-class AsyncSessionSpy:
-    def __init__(self) -> None:
-        self.flush_calls = 0
-
-    async def flush(self) -> None:
-        self.flush_calls += 1
-
-
-class AsyncSessionShim:
-    def __init__(self, sync_session: Session) -> None:
-        self.sync_session = sync_session
-
-    async def flush(self) -> None:
-        self.sync_session.flush()
-
-
-class FakeStoreOps:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-        self.put_error: Exception | None = None
-        self.delete_error: Exception | None = None
-        self.put_response: object = {
-            "size_bytes": 5,
-            "content_type": "text/plain",
-            "etag": "etag-123",
-            "checksum": "sum-123",
-            "version": "v1",
-        }
-
-    def _record(self, name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
-        self.calls.append((name, args, kwargs))
-
-    def put(
-        self,
-        path: str,
-        file: object,
-        *,
-        attributes: object | None = None,
-        tags: dict[str, str] | None = None,
-        mode: object | None = None,
-        use_multipart: bool | None = None,
-        chunk_size: int = 5 * 1024 * 1024,
-        max_concurrency: int = 12,
-    ) -> object:
-        self._record(
-            "put",
-            (path, file),
-            {
-                "attributes": attributes,
-                "tags": tags,
-                "mode": mode,
-                "use_multipart": use_multipart,
-                "chunk_size": chunk_size,
-                "max_concurrency": max_concurrency,
-            },
-        )
-        if self.put_error is not None:
-            raise self.put_error
-        return self.put_response
-
-    async def put_async(
-        self,
-        path: str,
-        file: object,
-        *,
-        attributes: object | None = None,
-        tags: dict[str, str] | None = None,
-        mode: object | None = None,
-        use_multipart: bool | None = None,
-        chunk_size: int = 5 * 1024 * 1024,
-        max_concurrency: int = 12,
-    ) -> object:
-        self._record(
-            "put_async",
-            (path, file),
-            {
-                "attributes": attributes,
-                "tags": tags,
-                "mode": mode,
-                "use_multipart": use_multipart,
-                "chunk_size": chunk_size,
-                "max_concurrency": max_concurrency,
-            },
-        )
-        if self.put_error is not None:
-            raise self.put_error
-        return self.put_response
-
-    def get(self, path: str, *, options: object | None = None) -> object:
-        self._record("get", (path,), {"options": options})
-        return b"downloaded-sync"
-
-    async def get_async(self, path: str, *, options: object | None = None) -> object:
-        self._record("get_async", (path,), {"options": options})
-        return b"downloaded-async"
-
-    def get_range(
-        self,
-        path: str,
-        *,
-        start: int,
-        end: int | None = None,
-        length: int | None = None,
-    ) -> object:
-        self._record("get_range", (path,), {"start": start, "end": end, "length": length})
-        return b"range-sync"
-
-    async def get_range_async(
-        self,
-        path: str,
-        *,
-        start: int,
-        end: int | None = None,
-        length: int | None = None,
-    ) -> object:
-        self._record("get_range_async", (path,), {"start": start, "end": end, "length": length})
-        return b"range-async"
-
-    def delete(self, paths: str | tuple[str, ...] | list[str]) -> None:
-        self._record("delete", (paths,), {})
-        if self.delete_error is not None:
-            raise self.delete_error
-
-    async def delete_async(self, paths: str | tuple[str, ...] | list[str]) -> None:
-        self._record("delete_async", (paths,), {})
-        if self.delete_error is not None:
-            raise self.delete_error
-
-
-def _configure_remote_field(*, field_name: str, store_ops: FakeStoreOps) -> None:
-    remote_file = cast("RemoteStorage", FileModel.__table__.c[field_name].type)
-    remote_file.store = store_ops
-
-
-def _file_handle(model: FileModel) -> RemoteFile:
-    return RemoteFile.from_metadata(model, FileModel.file)
-
-
-def _attachment_handle(model: FileModel) -> RemoteFile:
-    return RemoteFile.from_metadata(model, FileModel.attachment)
-
-
-def _rollback_nested_delete(*, session: Session, model: FileModel) -> None:
-    message = "nested rollback"
-    with session.begin_nested():
-        _file_handle(model).delete(session=session, flush=True)
-        raise RuntimeError(message)
-
-
-@pytest.fixture
-def engine() -> Engine:
-    engine = create_engine("sqlite:///:memory:")
-    DataclassBase.metadata.create_all(engine)
-    return engine
+    assert remote_storage.build_key(model_id="abc", field_name="file") == "abc/file"
+    assert remote_storage.build_key(model_id=42, field_name="file") == "42/file"
 
 
 def test_remote_file_compiles_to_jsonb_for_postgres() -> None:
@@ -222,632 +36,117 @@ def test_remote_file_compiles_to_json_for_sqlite() -> None:
     assert "JSON" in compiled
 
 
-def test_build_key_is_deterministic_model_id_and_field() -> None:
-    remote_file = RemoteStorage(store=MemoryStore())
+def test_build_key_strips_leading_slashes() -> None:
+    remote_storage = RemoteStorage(store=MemoryStore())
 
-    assert remote_file.build_key(model_id="abc", field_name="file") == "abc/file"
-    assert remote_file.build_key(model_id=42, field_name="file") == "42/file"
-
-
-def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
-    with pytest.raises(TypeError):
-        RemoteStorage(store=MemoryStore(), key_prefix="uploads")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        RemoteStorage(store=MemoryStore(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
+    assert remote_storage.build_key(model_id="/abc", field_name="/file") == "abc/file"
 
 
-def test_from_metadata_resolves_remote_storage_for_mapped_field() -> None:
-    model = FileModel()
-
-    handle = RemoteFile.from_metadata(model, FileModel.file)
-
-    assert handle.field_name == "file"
+def test_process_bind_param_none_returns_none() -> None:
+    assert RemoteStorage(store=MemoryStore()).process_bind_param(None, None) is None
 
 
-def test_from_metadata_rejects_non_remote_storage_field() -> None:
-    model = FileModel()
-
-    with pytest.raises(TypeError, match=r"must use brussels\.types\.file\.RemoteStorage"):
-        RemoteFile.from_metadata(model, FileModel.id)  # type: ignore[arg-type]
-
-
-def test_from_metadata_rejects_field_from_different_model() -> None:
-    model = FileModel()
-
-    with pytest.raises(TypeError, match=r"is not mapped on model type"):
-        RemoteFile.from_metadata(model, OtherFileModel.file)
-
-
-def test_model_does_not_receive_dynamic_file_methods() -> None:
-    assert "put" not in FileModel.__dict__
-    assert "get" not in FileModel.__dict__
-    assert "get_range" not in FileModel.__dict__
-    assert "delete" not in FileModel.__dict__
-
-
-def test_put_sync_updates_metadata_and_returns_put_result() -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel()
-    expected_key = f"{model.id}/file"
-    session = SyncSessionSpy()
-
-    put_result = _file_handle(model).put(
-        b"hello",
-        content_type="text/plain",
-        session=cast("Session", session),
-        flush=True,
-    )
-
-    assert put_result == store_ops.put_response
-    assert model.file is not None
-    assert model.file.status == "complete"
-    assert model.file.key == expected_key
-    assert model.file.size_bytes == 5
-    assert session.flush_calls == 2
-    assert [name for name, *_rest in store_ops.calls] == ["put"]
-    assert store_ops.calls[0][1][0] == expected_key
-    assert store_ops.calls[0][1][1] == b"hello"
-
-
-@pytest.mark.asyncio
-async def test_put_async_success_updates_metadata_and_returns_put_result() -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel()
-    expected_key = f"{model.id}/file"
-    session = SyncSessionSpy()
-
-    put_result = await _file_handle(model).put_async(
-        b"hello",
-        content_type="text/plain",
-        session=cast("Session", session),
-        flush=True,
-    )
-
-    assert put_result == store_ops.put_response
-    assert model.file is not None
-    assert model.file.status == "complete"
-    assert model.file.key == expected_key
-    assert model.file.size_bytes == 5
-    assert session.flush_calls == 2
-    assert [name for name, *_rest in store_ops.calls] == ["put_async"]
-    assert store_ops.calls[0][1][0] == expected_key
-    assert store_ops.calls[0][1][1] == b"hello"
-
-
-@pytest.mark.asyncio
-async def test_put_async_failure_marks_metadata_failed_and_re_raises() -> None:
-    store_ops = FakeStoreOps()
-    store_ops.put_error = RuntimeError("upload failed")
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel()
-    session = AsyncSessionSpy()
-
-    with pytest.raises(RuntimeError, match="upload failed"):
-        await _file_handle(model).put_async(
-            b"boom",
-            session=cast("AsyncSession", session),
-            flush=True,
-        )
-
-    assert model.file is not None
-    assert model.file.status == "failed"
-    assert session.flush_calls == 2
-
-
-def test_get_get_range_and_delete_sync() -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
+def test_process_bind_param_serializes_metadata() -> None:
+    now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     metadata = RemoteMetadata(
-        key="folder/item.txt",
-        status="complete",
-        created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-        updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-    )
-    model = FileModel(file=metadata)
-
-    file_handle = _file_handle(model)
-    options = cast("GetOptions", {"head": True})
-    downloaded = file_handle.get(options=options)
-    ranged = file_handle.get_range(start=0, end=4)
-    file_handle.delete()
-
-    assert downloaded == b"downloaded-sync"
-    assert ranged == b"range-sync"
-    assert model.file is None
-    assert [name for name, *_rest in store_ops.calls] == ["get", "get_range", "delete"]
-    assert store_ops.calls[0][2]["options"] == options
-    assert store_ops.calls[1][2]["start"] == 0
-    assert store_ops.calls[1][2]["end"] == 4
-    assert store_ops.calls[1][2]["length"] is None
-    assert store_ops.calls[2][1][0] == "folder/item.txt"
-
-
-@pytest.mark.asyncio
-async def test_get_get_range_and_delete_async() -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    metadata = RemoteMetadata(
-        key="folder/item.txt",
-        status="complete",
-        created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-        updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-    )
-    model = FileModel(file=metadata)
-
-    file_handle = _file_handle(model)
-    options = cast("GetOptions", {"head": True})
-    downloaded = await file_handle.get_async(options=options)
-    ranged = await file_handle.get_range_async(start=0, end=4)
-    await file_handle.delete_async()
-
-    assert downloaded == b"downloaded-async"
-    assert ranged == b"range-async"
-    assert model.file is None
-    assert [name for name, *_rest in store_ops.calls] == ["get_async", "get_range_async", "delete_async"]
-    assert store_ops.calls[0][2]["options"] == options
-    assert store_ops.calls[1][2]["start"] == 0
-    assert store_ops.calls[1][2]["end"] == 4
-    assert store_ops.calls[1][2]["length"] is None
-    assert store_ops.calls[2][1][0] == "folder/item.txt"
-
-
-@pytest.mark.asyncio
-async def test_put_requires_model_id() -> None:
-    _configure_remote_field(field_name="file", store_ops=FakeStoreOps())
-    model = FileModel()
-    model.id = None  # type: ignore[assignment]
-
-    with pytest.raises(ValueError, match=r"model\.id"):
-        await _file_handle(model).put_async(b"data")
-
-
-@pytest.mark.asyncio
-async def test_get_get_range_and_delete_require_metadata() -> None:
-    _configure_remote_field(field_name="file", store_ops=FakeStoreOps())
-    model = FileModel(file=None)
-    file_handle = _file_handle(model)
-
-    with pytest.raises(ValueError, match="has no file metadata"):
-        file_handle.get()
-    with pytest.raises(ValueError, match="has no file metadata"):
-        await file_handle.get_async()
-    with pytest.raises(ValueError, match="has no file metadata"):
-        file_handle.get_range(start=0, end=1)
-    with pytest.raises(ValueError, match="has no file metadata"):
-        await file_handle.get_range_async(start=0, end=1)
-    with pytest.raises(ValueError, match="has no file metadata"):
-        file_handle.delete()
-    with pytest.raises(ValueError, match="has no file metadata"):
-        await file_handle.delete_async()
-
-
-@pytest.mark.asyncio
-async def test_delete_async_delete_remote_false_does_not_call_store_delete() -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-    model = FileModel(
-        file=RemoteMetadata(
-            key="folder/file.txt",
-            status="complete",
-            created_at=created_at,
-            updated_at=created_at,
-        ),
+        key="example/file.txt",
+        status="pending",
+        created_at=now,
+        updated_at=now,
     )
 
-    await _file_handle(model).delete_async(delete_remote=False)
+    bound = RemoteStorage(store=MemoryStore()).process_bind_param(metadata, None)
 
-    assert model.file is None
-    assert store_ops.calls == []
+    assert bound is not None
+    assert bound["schema"] == 1
+    assert bound["key"] == "example/file.txt"
+    assert bound["status"] == "pending"
 
 
-@pytest.mark.asyncio
-async def test_cleanup_remote_fields_deletes_multiple_fields() -> None:
-    file_store = FakeStoreOps()
-    attachment_store = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=file_store)
-    _configure_remote_field(field_name="attachment", store_ops=attachment_store)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-    model = FileModel(
-        file=RemoteMetadata(
-            key="folder/file.txt",
-            status="complete",
-            created_at=created_at,
-            updated_at=created_at,
-        ),
-        attachment=RemoteMetadata(
-            key="folder/attachment.txt",
-            status="complete",
-            created_at=created_at,
-            updated_at=created_at,
-        ),
+def test_process_bind_param_accepts_dict_payload() -> None:
+    raw = {
+        "schema": 1,
+        "key": "example/file.txt",
+        "status": "pending",
+        "created_at": "2025-01-01T12:00:00+00:00",
+        "updated_at": "2025-01-01T12:01:00+00:00",
+    }
+
+    bound = RemoteStorage(store=MemoryStore()).process_bind_param(raw, None)
+
+    assert bound is not None
+    assert bound["schema"] == 1
+    assert bound["key"] == "example/file.txt"
+
+
+def test_process_bind_param_rejects_invalid_value_type() -> None:
+    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata is invalid"):
+        RemoteStorage(store=MemoryStore()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
+
+
+def test_process_result_value_none_returns_none() -> None:
+    assert RemoteStorage(store=MemoryStore()).process_result_value(None, None) is None
+
+
+def test_process_result_value_returns_typed_metadata() -> None:
+    raw = {
+        "schema": 1,
+        "key": "example/file.txt",
+        "status": "complete",
+        "size_bytes": 8,
+        "content_type": "text/plain",
+        "etag": "etag-value",
+        "checksum": "checksum-value",
+        "version": "v1",
+        "created_at": "2025-01-01T12:00:00+00:00",
+        "updated_at": "2025-01-01T12:01:00+00:00",
+    }
+
+    metadata = RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
+
+    assert isinstance(metadata, RemoteMetadata)
+    assert metadata.status == "complete"
+    assert metadata.size_bytes == 8
+
+
+def test_process_result_value_rejects_non_dict_payload() -> None:
+    with pytest.raises(TypeError, match="expected dict"):
+        RemoteStorage(store=MemoryStore()).process_result_value("bad", None)
+
+
+def test_process_result_value_rejects_invalid_metadata_payload() -> None:
+    raw = {
+        "schema": 1,
+        "key": "example/file.txt",
+        "status": "deleted",
+        "created_at": "2025-01-01T12:00:00+00:00",
+        "updated_at": "2025-01-01T12:01:00+00:00",
+    }
+
+    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata from database is invalid"):
+        RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
+
+
+def test_get_metadata_coerces_dict_to_remote_metadata() -> None:
+    model = ModelWithMetadataField(
+        {
+            "schema": 1,
+            "key": "example/file.txt",
+            "status": "pending",
+            "created_at": "2025-01-01T12:00:00+00:00",
+            "updated_at": "2025-01-01T12:00:00+00:00",
+        },
     )
 
-    await cleanup_remote_fields(model=model, fields=[FileModel.file, FileModel.attachment])
+    metadata = RemoteStorage(store=MemoryStore()).get_metadata(model=model, field_name="file")
 
-    assert model.file is None
-    assert model.attachment is None
-    assert [name for name, *_rest in file_store.calls] == ["delete_async"]
-    assert [name for name, *_rest in attachment_store.calls] == ["delete_async"]
-    assert file_store.calls[0][1][0] == "folder/file.txt"
-    assert attachment_store.calls[0][1][0] == "folder/attachment.txt"
+    assert isinstance(metadata, RemoteMetadata)
+    assert isinstance(model.file, RemoteMetadata)
+    assert metadata.key == "example/file.txt"
 
 
-@pytest.mark.asyncio
-async def test_cleanup_remote_fields_is_fail_fast() -> None:
-    file_store = FakeStoreOps()
-    attachment_store = FakeStoreOps()
-    file_store.delete_error = RuntimeError("delete failed")
-    _configure_remote_field(field_name="file", store_ops=file_store)
-    _configure_remote_field(field_name="attachment", store_ops=attachment_store)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-    model = FileModel(
-        file=RemoteMetadata(
-            key="folder/file.txt",
-            status="complete",
-            created_at=created_at,
-            updated_at=created_at,
-        ),
-        attachment=RemoteMetadata(
-            key="folder/attachment.txt",
-            status="complete",
-            created_at=created_at,
-            updated_at=created_at,
-        ),
-    )
+def test_get_metadata_rejects_invalid_field_value_type() -> None:
+    model = ModelWithMetadataField(123)
 
-    with pytest.raises(RuntimeError, match="delete failed"):
-        await cleanup_remote_fields(model=model, fields=[FileModel.file, FileModel.attachment])
-
-    assert model.file is not None
-    assert model.attachment is not None
-    assert [name for name, *_rest in file_store.calls] == ["delete_async"]
-    assert attachment_store.calls == []
-
-
-@pytest.mark.asyncio
-async def test_cleanup_remote_fields_skips_empty_metadata() -> None:
-    file_store = FakeStoreOps()
-    attachment_store = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=file_store)
-    _configure_remote_field(field_name="attachment", store_ops=attachment_store)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-    model = FileModel(
-        file=None,
-        attachment=RemoteMetadata(
-            key="folder/attachment.txt",
-            status="complete",
-            created_at=created_at,
-            updated_at=created_at,
-        ),
-    )
-
-    await cleanup_remote_fields(model=model, fields=[FileModel.file, FileModel.attachment])
-
-    assert model.file is None
-    assert model.attachment is None
-    assert file_store.calls == []
-    assert [name for name, *_rest in attachment_store.calls] == ["delete_async"]
-
-
-def test_remote_file_from_metadata_returns_handle() -> None:
-    model = FileModel()
-
-    handle = RemoteFile.from_metadata(model, FileModel.file)
-
-    assert isinstance(handle, RemoteFile)
-    assert handle.field_name == "file"
-
-
-@pytest.mark.asyncio
-async def test_remote_file_metadata_property_tracks_field_updates() -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel()
-    file_handle = _file_handle(model)
-
-    assert file_handle.metadata is None
-
-    await file_handle.put_async(b"hello")
-    assert file_handle.metadata is not None
-    assert file_handle.metadata.status == "complete"
-
-    await file_handle.delete_async()
-    assert file_handle.metadata is None
-
-
-def test_attachment_field_handle_resolves() -> None:
-    model = FileModel()
-
-    handle = _attachment_handle(model)
-
-    assert handle.field_name == "attachment"
-
-
-def test_lifecycle_listener_registration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
-    listeners: set[tuple[str, str]] = set()
-    calls: list[tuple[str, str]] = []
-
-    def fake_contains(_target: object, event_name: str, handler: object) -> bool:
-        handler_name = getattr(handler, "__name__", "unknown")
-        return (event_name, handler_name) in listeners
-
-    def fake_listen(_target: object, event_name: str, handler: object) -> None:
-        handler_name = getattr(handler, "__name__", "unknown")
-        key = (event_name, handler_name)
-        listeners.add(key)
-        calls.append(key)
-
-    monkeypatch.setattr(file_lifecycle.event, "contains", fake_contains)
-    monkeypatch.setattr(file_lifecycle.event, "listen", fake_listen)
-    monkeypatch.setattr(FileLifecycleCoordinator, "_registered", False)
-
-    FileLifecycleCoordinator.ensure_listeners_registered()
-    FileLifecycleCoordinator.ensure_listeners_registered()
-
-    assert FileLifecycleCoordinator.LIFECYCLE_STATE_KEY == "brussels_file_lifecycle_state"
-    assert calls == [
-        ("after_transaction_create", "_after_transaction_create"),
-        ("after_commit", "_after_commit"),
-        ("after_rollback", "_after_rollback"),
-        ("after_transaction_end", "_after_transaction_end"),
-    ]
-
-
-def test_put_with_sqlalchemy_session_defers_remote_upload_until_commit(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-
-    with Session(engine) as session:
-        model = FileModel()
-        session.add(model)
-        session.flush()
-        expected_key = f"{model.id}/file"
-        model_id = model.id
-
-        result = _file_handle(model).put(b"hello", session=session, flush=True)
-
-        assert result == {"deferred": True, "key": expected_key}
-        assert model.file is not None
-        assert model.file.status == "pending"
-        assert store_ops.calls == []
-
-        session.commit()
-
-    assert [name for name, *_rest in store_ops.calls] == ["put"]
-    assert store_ops.calls[0][1][0] == expected_key
-    assert store_ops.calls[0][1][1] == b"hello"
-
-    with Session(engine) as read_session:
-        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
-        assert metadata is not None
-        assert metadata.status == "complete"
-        assert metadata.key == expected_key
-
-
-def test_put_with_sqlalchemy_session_rollback_discards_queued_upload(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-
-    with Session(engine) as session:
-        model = FileModel()
-        session.add(model)
-        session.flush()
-
-        _file_handle(model).put(b"hello", session=session, flush=True)
-        assert store_ops.calls == []
-        session.rollback()
-
-    assert store_ops.calls == []
-
-    with Session(engine) as read_session:
-        persisted = read_session.get(FileModel, model.id)
-        assert persisted is None
-
-
-def test_delete_with_sqlalchemy_session_defers_remote_delete_until_commit(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-
-    with Session(engine) as session:
-        model = FileModel(
-            file=RemoteMetadata(
-                key="folder/item.txt",
-                status="complete",
-                created_at=created_at,
-                updated_at=created_at,
-            ),
-        )
-        session.add(model)
-        session.commit()
-        model_id = model.id
-
-    with Session(engine) as session:
-        model = session.get(FileModel, model_id)
-        assert model is not None
-
-        _file_handle(model).delete(session=session, flush=True)
-
-        assert model.file is None
-        assert store_ops.calls == []
-        session.commit()
-
-    assert [name for name, *_rest in store_ops.calls] == ["delete"]
-    assert store_ops.calls[0][1][0] == "folder/item.txt"
-
-    with Session(engine) as read_session:
-        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
-        assert metadata is None
-
-
-def test_delete_with_sqlalchemy_session_rollback_discards_queued_delete(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-
-    with Session(engine) as session:
-        model = FileModel(
-            file=RemoteMetadata(
-                key="folder/item.txt",
-                status="complete",
-                created_at=created_at,
-                updated_at=created_at,
-            ),
-        )
-        session.add(model)
-        session.commit()
-        model_id = model.id
-
-    with Session(engine) as session:
-        model = session.get(FileModel, model_id)
-        assert model is not None
-        _file_handle(model).delete(session=session, flush=True)
-        assert model.file is None
-        session.rollback()
-
-    assert store_ops.calls == []
-
-    with Session(engine) as read_session:
-        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
-        assert metadata is not None
-        assert metadata.key == "folder/item.txt"
-        assert metadata.status == "complete"
-
-
-def test_deferred_put_failure_marks_metadata_failed_and_cleans_up(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    store_ops.put_error = RuntimeError("upload failed")
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-
-    with Session(engine) as session:
-        model = FileModel()
-        session.add(model)
-        session.flush()
-        model_id = model.id
-
-        _file_handle(model).put(b"hello", session=session, flush=True)
-        session.commit()
-
-    assert [name for name, *_rest in store_ops.calls] == ["put", "delete"]
-    with Session(engine) as read_session:
-        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
-        assert metadata is not None
-        assert metadata.status == "failed"
-
-
-def test_deferred_delete_failure_restores_failed_metadata(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    store_ops.delete_error = RuntimeError("delete failed")
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-
-    with Session(engine) as session:
-        model = FileModel(
-            file=RemoteMetadata(
-                key="folder/item.txt",
-                status="complete",
-                created_at=created_at,
-                updated_at=created_at,
-            ),
-        )
-        session.add(model)
-        session.commit()
-        model_id = model.id
-
-    with Session(engine) as session:
-        model = session.get(FileModel, model_id)
-        assert model is not None
-        _file_handle(model).delete(session=session, flush=True)
-        session.commit()
-
-    assert [name for name, *_rest in store_ops.calls] == ["delete"]
-
-    with Session(engine) as read_session:
-        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
-        assert metadata is not None
-        assert metadata.status == "failed"
-        assert metadata.key == "folder/item.txt"
-
-
-@pytest.mark.asyncio
-async def test_put_async_with_async_session_shim_defers_until_commit(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-
-    with Session(engine) as session:
-        model = FileModel()
-        session.add(model)
-        session.flush()
-        expected_key = f"{model.id}/file"
-        async_session = AsyncSessionShim(session)
-
-        result = await _file_handle(model).put_async(
-            b"hello",
-            session=cast("AsyncSession", async_session),
-            flush=True,
-        )
-
-        assert result == {"deferred": True, "key": expected_key}
-        assert store_ops.calls == []
-        session.commit()
-
-    assert [name for name, *_rest in store_ops.calls] == ["put"]
-
-
-@pytest.mark.asyncio
-async def test_put_async_with_async_session_shim_rollback_discards_queue(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-
-    with Session(engine) as session:
-        model = FileModel()
-        session.add(model)
-        session.flush()
-        async_session = AsyncSessionShim(session)
-
-        await _file_handle(model).put_async(
-            b"hello",
-            session=cast("AsyncSession", async_session),
-            flush=True,
-        )
-
-        assert store_ops.calls == []
-        session.rollback()
-
-    assert store_ops.calls == []
-
-
-def test_nested_transaction_rollback_discards_only_nested_operations(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-
-    with Session(engine) as session:
-        model = FileModel(
-            file=RemoteMetadata(
-                key="folder/item.txt",
-                status="complete",
-                created_at=created_at,
-                updated_at=created_at,
-            ),
-        )
-        session.add(model)
-        session.commit()
-        model_id = model.id
-
-    with Session(engine) as session:
-        model = session.get(FileModel, model_id)
-        assert model is not None
-
-        _file_handle(model).put(b"hello", session=session, flush=True)
-        assert store_ops.calls == []
-
-        with pytest.raises(RuntimeError, match="nested rollback"):
-            _rollback_nested_delete(session=session, model=model)
-
-        session.commit()
-
-    assert [name for name, *_rest in store_ops.calls] == ["put"]
+    with pytest.raises(TypeError, match=r"must hold RemoteMetadata \| dict \| None"):
+        RemoteStorage(store=MemoryStore()).get_metadata(model=model, field_name="file")

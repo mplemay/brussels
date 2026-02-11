@@ -261,7 +261,7 @@ class RemoteFile[M: PrimaryKeyMixin]:
         resolved_session = self._resolve_sync_session(session=session, model=self.model)
         if resolved_session is not None:
             payload = snapshot_put_payload(file)
-            deferred_result = enqueue_put_operation(
+            enqueue_put_operation(
                 session=resolved_session,
                 model=self.model,
                 field_name=self.field_name,
@@ -276,7 +276,7 @@ class RemoteFile[M: PrimaryKeyMixin]:
                 max_concurrency=max_concurrency,
                 content_type=content_type,
             )
-            return cast("PutResult", deferred_result)
+            return cast("PutResult", {"e_tag": None, "version": None})
 
         try:
             result = self.remote_storage.store.put(
@@ -325,7 +325,7 @@ class RemoteFile[M: PrimaryKeyMixin]:
         resolved_session = self._resolve_sync_session(session=session, model=self.model)
         if resolved_session is not None:
             payload = await snapshot_put_payload_async(file)
-            deferred_result = enqueue_put_operation(
+            enqueue_put_operation(
                 session=resolved_session,
                 model=self.model,
                 field_name=self.field_name,
@@ -340,7 +340,7 @@ class RemoteFile[M: PrimaryKeyMixin]:
                 max_concurrency=max_concurrency,
                 content_type=content_type,
             )
-            return cast("PutResult", deferred_result)
+            return cast("PutResult", {"e_tag": None, "version": None})
 
         try:
             result = await self.remote_storage.store.put_async(

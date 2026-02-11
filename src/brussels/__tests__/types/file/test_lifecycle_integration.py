@@ -161,8 +161,9 @@ def test_put_with_sqlalchemy_session_defers_remote_upload_until_commit(engine: E
 
         result = _file_handle(model).put(b"hello", session=session, flush=True)
 
-        assert result == {"deferred": True, "key": expected_key}
+        assert result == {"e_tag": None, "version": None}
         assert model.file is not None
+        assert model.file.key == expected_key
         assert model.file.status == "pending"
         assert store_ops.calls == []
 
@@ -338,7 +339,10 @@ async def test_put_async_with_async_session_shim_defers_until_commit(engine: Eng
             flush=True,
         )
 
-        assert result == {"deferred": True, "key": expected_key}
+        assert result == {"e_tag": None, "version": None}
+        assert model.file is not None
+        assert model.file.key == expected_key
+        assert model.file.status == "pending"
         assert store_ops.calls == []
         session.commit()
 

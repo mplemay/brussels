@@ -114,7 +114,7 @@ class FileLifecycleCoordinator:
         chunk_size: int,
         max_concurrency: int,
         content_type: str | None,
-    ) -> dict[str, object]:
+    ) -> None:
         cls.ensure_listeners_registered()
         operation = QueuedPutOperation(
             model=model,
@@ -133,7 +133,6 @@ class FileLifecycleCoordinator:
             content_type=content_type,
         )
         cls._enqueue_operation(session=session, operation=operation)
-        return {"deferred": True, "key": metadata.key}
 
     @classmethod
     def enqueue_delete_operation(
@@ -483,7 +482,7 @@ def enqueue_put_operation(  # noqa: PLR0913
     chunk_size: int,
     max_concurrency: int,
     content_type: str | None,
-) -> dict[str, object]:
+) -> None:
     return FileLifecycleCoordinator.enqueue_put_operation(
         session=session,
         model=model,

@@ -4,8 +4,8 @@ _FILE_IMPORT_ERROR = (
 )
 
 try:
-    from obstore.store import ObjectStore as _ObjectStoreDependencyCheck  # type: ignore[import-not-found]
-    from pydantic import BaseModel as _PydanticDependencyCheck  # type: ignore[import-not-found]
+    from obstore.store import ObjectStore as _ObjectStoreDependencyCheck
+    from pydantic import BaseModel as _PydanticDependencyCheck
 except ModuleNotFoundError as exc:
     raise ImportError(_FILE_IMPORT_ERROR) from exc
 else:

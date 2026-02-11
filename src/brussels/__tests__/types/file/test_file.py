@@ -9,7 +9,7 @@ from brussels.base import Base, DataclassBase
 from brussels.mixins import PrimaryKeyMixin
 
 try:
-    from obstore.store import MemoryStore  # ty: ignore[unresolved-import]
+    from obstore.store import MemoryStore
 
     from brussels.types.file import RemoteFile, RemoteMetadata, RemoteStorage
 except ImportError:

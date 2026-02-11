@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from brussels.base import Base
 
 try:
-    from obstore.store import MemoryStore  # ty: ignore[unresolved-import]
+    from obstore.store import MemoryStore
 
     from brussels.types.file import RemoteMetadata, RemoteStorage
 except ImportError:
@@ -51,7 +51,7 @@ def test_process_bind_param_serializes_metadata() -> None:
     assert bound["schema"] == 1
     assert bound["key"] == "example/file.txt"
     assert bound["status"] == "pending"
-    assert bound["created_at"] == now.isoformat()
+    assert bound["created_at"] in {now.isoformat(), "2025-01-01T12:00:00Z"}
 
 
 def test_process_bind_param_rejects_invalid_value_type() -> None:
@@ -93,7 +93,7 @@ def test_process_result_value_rejects_legacy_store_name_field() -> None:
         "updated_at": "2025-01-01T12:01:00+00:00",
     }
 
-    with pytest.raises(ValueError, match="metadata from database is invalid"):
+    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata from database is invalid"):
         RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
 
 

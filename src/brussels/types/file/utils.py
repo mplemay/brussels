@@ -53,15 +53,13 @@ async def cleanup_remote_fields(
     session: Session | AsyncSession | None = None,
     flush: bool = False,
     delete_remote: bool = True,
-    **delete_kwargs: object,
 ) -> None:
     for field in fields:
         remote_file = RemoteFile.from_metadata(model, field)
         if remote_file.metadata is None:
             continue
-        await remote_file.delete(
+        await remote_file.delete_async(
             session=session,
             flush=flush,
             delete_remote=delete_remote,
-            **delete_kwargs,
         )

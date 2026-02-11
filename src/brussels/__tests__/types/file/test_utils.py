@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 
@@ -20,7 +21,10 @@ class Row:
     file: RemoteMetadata | None
 
 
-def _metadata(*, status: str, updated_at: datetime) -> RemoteMetadata:
+type StatusLiteral = Literal["pending", "complete", "failed", "deleted"]
+
+
+def _metadata(*, status: StatusLiteral, updated_at: datetime) -> RemoteMetadata:
     return RemoteMetadata(
         key="folder/item.txt",
         status=status,

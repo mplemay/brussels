@@ -2,20 +2,22 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator  # ty: ignore[unresolved-import]
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from brussels.utils import now, utc
 
 if TYPE_CHECKING:
     from datetime import datetime
+else:
+    from datetime import datetime as _datetime
 
 type RemoteMetadataDict = dict[str, object]
 
 
 class RemoteMetadata(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    schema: Literal[1] = 1
+    schema_version: Literal[1] = Field(default=1, alias="schema")
     bucket: str | None = None
     key: str
     url: str | None = None
@@ -38,8 +40,12 @@ class RemoteMetadata(BaseModel):
         return utc(value, raise_on_naive=False)
 
     def to_dict(self) -> RemoteMetadataDict:
-        return cast("RemoteMetadataDict", self.model_dump(mode="json"))
+        return cast("RemoteMetadataDict", self.model_dump(mode="json", by_alias=True))
 
     @classmethod
     def from_dict(cls, data: RemoteMetadataDict) -> Self:
         return cls.model_validate(data)
+
+
+if not TYPE_CHECKING:
+    RemoteMetadata.model_rebuild(_types_namespace={"datetime": _datetime})

@@ -196,6 +196,26 @@ def test_put_with_sqlalchemy_session_rollback_discards_queued_upload(engine: Eng
     assert store_ops.calls == []
 
 
+def test_put_without_explicit_session_uses_object_session_and_defers(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+        expected_key = f"{model.id}/file"
+
+        result = _file_handle(model).put(b"hello", flush=True)
+        assert result == {"e_tag": None, "version": None}
+        assert store_ops.calls == []
+
+        session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["put"]
+    assert store_ops.calls[0][1][0] == expected_key
+
+
 def test_delete_with_sqlalchemy_session_defers_remote_delete_until_commit(engine: Engine) -> None:
     store_ops = FakeStoreOps()
     _configure_remote_field(store_ops=store_ops)

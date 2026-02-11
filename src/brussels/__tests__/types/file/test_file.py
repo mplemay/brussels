@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
 import pytest
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from brussels.base import Base, DataclassBase
 from brussels.mixins import PrimaryKeyMixin
@@ -19,8 +20,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from obstore import Attributes, GetOptions, PutMode
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy.orm import Session
 
     from brussels.types.file.file import RemoteMetadataField
 
@@ -46,22 +45,6 @@ class OtherFileModel(DataclassBase, PrimaryKeyMixin):
 
 class TablelessPrimaryKeyModel(PrimaryKeyMixin):
     pass
-
-
-class SyncSessionSpy:
-    def __init__(self) -> None:
-        self.flush_calls = 0
-
-    def flush(self) -> None:
-        self.flush_calls += 1
-
-
-class AsyncSessionSpy:
-    def __init__(self) -> None:
-        self.flush_calls = 0
-
-    async def flush(self) -> None:
-        self.flush_calls += 1
 
 
 class FakeStoreOps:
@@ -179,6 +162,13 @@ def _file_handle(model: FileModel) -> RemoteFile:
     return RemoteFile.from_metadata(model, FileModel.file)
 
 
+@pytest.fixture
+def engine() -> Engine:
+    engine = create_engine("sqlite:///:memory:")
+    DataclassBase.metadata.create_all(engine)
+    return engine
+
+
 def test_from_metadata_rejects_models_without_primary_key_mixin() -> None:
     model = NoPrimaryKeyMixinModel(id=1)
 
@@ -226,43 +216,46 @@ def test_from_metadata_accepts_models_with_primary_key_mixin() -> None:
     assert remote_file.field_name == "file"
 
 
-def test_put_sync_updates_metadata_and_returns_put_result() -> None:
+def test_put_sync_without_sqlalchemy_session_raises_and_does_not_call_store() -> None:
     store_ops = FakeStoreOps()
     _configure_store(store_ops)
     model = FileModel()
-    expected_key = f"{model.id}/file"
-    session = SyncSessionSpy()
 
-    put_result = _file_handle(model).put(
-        b"hello",
-        content_type="text/plain",
-        session=cast("Session", session),
-        flush=True,
-    )
+    with pytest.raises(RuntimeError, match="requires a resolvable SQLAlchemy session"):
+        _file_handle(model).put(
+            b"hello",
+            content_type="text/plain",
+        )
 
-    assert put_result == store_ops.put_response
-    assert model.file is not None
-    assert model.file.status == "complete"
-    assert model.file.key == expected_key
-    assert model.file.size_bytes == 5
-    assert session.flush_calls == 2
+    assert store_ops.calls == []
+    assert model.file is None
+
+
+def test_put_sync_defers_and_commits_when_sqlalchemy_session_is_attached(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_store(store_ops)
+    with Session(engine) as session:
+        model = FileModel()
+        expected_key = f"{model.id}/file"
+        session.add(model)
+        session.flush()
+
+        put_result = _file_handle(model).put(
+            b"hello",
+            content_type="text/plain",
+        )
+        assert put_result == {"e_tag": None, "version": None}
+        assert model.file is not None
+        assert model.file.status == "pending"
+        assert model.file.key == expected_key
+        assert store_ops.calls == []
+
+        session.commit()
+
     assert [name for name, *_ in store_ops.calls] == ["put"]
 
 
-def test_put_sync_failure_marks_metadata_failed_and_reraises() -> None:
-    store_ops = FakeStoreOps()
-    store_ops.put_error = RuntimeError("upload failed")
-    _configure_store(store_ops)
-    model = FileModel()
-
-    with pytest.raises(RuntimeError, match="upload failed"):
-        _file_handle(model).put(b"boom")
-
-    assert model.file is not None
-    assert model.file.status == "failed"
-
-
-def test_put_preserves_existing_metadata_when_result_has_no_fields() -> None:
+def test_put_preserves_existing_metadata_when_result_has_no_fields(engine: Engine) -> None:
     store_ops = FakeStoreOps()
     store_ops.put_response = {}
     _configure_store(store_ops)
@@ -281,7 +274,11 @@ def test_put_preserves_existing_metadata_when_result_has_no_fields() -> None:
         ),
     )
 
-    _file_handle(model).put(b"hello")
+    with Session(engine) as session:
+        session.add(model)
+        session.flush()
+        _file_handle(model).put(b"hello")
+        session.commit()
 
     assert model.file is not None
     assert model.file.status == "complete"
@@ -293,34 +290,64 @@ def test_put_preserves_existing_metadata_when_result_has_no_fields() -> None:
     assert model.file.version == "v-old"
 
 
-def test_put_validates_metadata_projection_types() -> None:
+def test_put_validates_metadata_projection_types(engine: Engine) -> None:
     store_ops = FakeStoreOps()
     store_ops.put_response = {"size_bytes": True}
     _configure_store(store_ops)
-    model = FileModel()
-
-    with pytest.raises(TypeError, match="Expected integer metadata field"):
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
         _file_handle(model).put(b"hello")
+
+        with pytest.raises(TypeError, match="Expected integer metadata field"):
+            session.commit()
 
 
 @pytest.mark.asyncio
-async def test_put_async_propagates_upload_options() -> None:
+async def test_put_async_without_sqlalchemy_session_raises_and_does_not_call_store() -> None:
     store_ops = FakeStoreOps()
     _configure_store(store_ops)
     model = FileModel()
 
-    await _file_handle(model).put_async(
-        b"hello",
-        attributes=cast("Attributes", {"cache_control": "max-age=60"}),
-        tags={"kind": "avatar"},
-        mode=cast("PutMode", "overwrite"),
-        use_multipart=True,
-        chunk_size=32,
-        max_concurrency=4,
-        content_type="text/plain",
-    )
+    with pytest.raises(RuntimeError, match="requires a resolvable SQLAlchemy session"):
+        await _file_handle(model).put_async(
+            b"hello",
+            attributes=cast("Attributes", {"cache_control": "max-age=60"}),
+            tags={"kind": "avatar"},
+            mode=cast("PutMode", "overwrite"),
+            use_multipart=True,
+            chunk_size=32,
+            max_concurrency=4,
+            content_type="text/plain",
+        )
 
-    assert [name for name, *_ in store_ops.calls] == ["put_async"]
+    assert store_ops.calls == []
+    assert model.file is None
+
+
+@pytest.mark.asyncio
+async def test_put_async_propagates_upload_options_with_attached_session(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_store(store_ops)
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+        await _file_handle(model).put_async(
+            b"hello",
+            attributes=cast("Attributes", {"cache_control": "max-age=60"}),
+            tags={"kind": "avatar"},
+            mode=cast("PutMode", "overwrite"),
+            use_multipart=True,
+            chunk_size=32,
+            max_concurrency=4,
+            content_type="text/plain",
+        )
+        assert store_ops.calls == []
+        session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["put"]
     assert store_ops.calls[0][2]["tags"] == {"kind": "avatar"}
     assert store_ops.calls[0][2]["use_multipart"] is True
     assert store_ops.calls[0][2]["chunk_size"] == 32
@@ -328,46 +355,32 @@ async def test_put_async_propagates_upload_options() -> None:
 
 
 @pytest.mark.asyncio
-async def test_put_async_failure_marks_metadata_failed_and_re_raises() -> None:
-    store_ops = FakeStoreOps()
-    store_ops.put_error = RuntimeError("upload failed")
-    _configure_store(store_ops)
-    model = FileModel()
-    session = AsyncSessionSpy()
-
-    with pytest.raises(RuntimeError, match="upload failed"):
-        await _file_handle(model).put_async(
-            b"boom",
-            session=cast("AsyncSession", session),
-            flush=True,
-        )
-
-    assert model.file is not None
-    assert model.file.status == "failed"
-    assert session.flush_calls == 2
-
-
-@pytest.mark.asyncio
-async def test_put_rejects_invalid_model_id_type() -> None:
+async def test_put_rejects_invalid_model_id_type(engine: Engine) -> None:
     _configure_store(FakeStoreOps())
-    model = FileModel()
-    model.id = cast("UUID", object())
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+        model.id = cast("UUID", object())
 
-    with pytest.raises(TypeError, match=r"Model id must be str, int, or UUID"):
-        await _file_handle(model).put_async(b"data")
+        with pytest.raises(TypeError, match=r"Model id must be str, int, or UUID"):
+            await _file_handle(model).put_async(b"data")
 
 
 @pytest.mark.asyncio
-async def test_put_allows_uuid_model_id() -> None:
+async def test_put_allows_uuid_model_id(engine: Engine) -> None:
     store_ops = FakeStoreOps()
     _configure_store(store_ops)
-    model = FileModel()
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+        await _file_handle(model).put_async(b"data")
+        session.commit()
 
-    await _file_handle(model).put_async(b"data")
-
-    assert isinstance(model.id, UUID)
-    assert model.file is not None
-    assert model.file.status == "complete"
+        assert isinstance(model.id, UUID)
+        assert model.file is not None
+        assert model.file.status == "complete"
 
 
 def test_get_get_range_and_delete_sync() -> None:
@@ -385,12 +398,12 @@ def test_get_get_range_and_delete_sync() -> None:
     options = cast("GetOptions", {"head": True})
     downloaded = file_handle.get(options=options)
     ranged = file_handle.get_range(start=0, end=4)
-    file_handle.delete()
+    file_handle.delete(delete_remote=False)
 
     assert downloaded == b"downloaded-sync"
     assert ranged == b"range-sync"
     assert model.file is None
-    assert [name for name, *_ in store_ops.calls] == ["get", "get_range", "delete"]
+    assert [name for name, *_ in store_ops.calls] == ["get", "get_range"]
 
 
 def test_delete_sync_delete_remote_false_does_not_call_store_delete() -> None:
@@ -410,6 +423,47 @@ def test_delete_sync_delete_remote_false_does_not_call_store_delete() -> None:
 
     assert model.file is None
     assert store_ops.calls == []
+
+
+def test_delete_sync_without_sqlalchemy_session_raises_and_does_not_call_store() -> None:
+    store_ops = FakeStoreOps()
+    _configure_store(store_ops)
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    model = FileModel(
+        file=RemoteMetadata(
+            key="folder/file.txt",
+            status="complete",
+            created_at=created_at,
+            updated_at=created_at,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="requires a resolvable SQLAlchemy session"):
+        _file_handle(model).delete()
+
+    assert store_ops.calls == []
+    assert model.file is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_async_without_sqlalchemy_session_raises_and_does_not_call_store() -> None:
+    store_ops = FakeStoreOps()
+    _configure_store(store_ops)
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    model = FileModel(
+        file=RemoteMetadata(
+            key="folder/file.txt",
+            status="complete",
+            created_at=created_at,
+            updated_at=created_at,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="requires a resolvable SQLAlchemy session"):
+        await _file_handle(model).delete_async()
+
+    assert store_ops.calls == []
+    assert model.file is not None
 
 
 @pytest.mark.asyncio

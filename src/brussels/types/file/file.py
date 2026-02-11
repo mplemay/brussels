@@ -46,41 +46,6 @@ else:
 type RemoteMetadataField = InstrumentedAttribute[RemoteMetadata | None]
 
 
-def _extract_value(result: object, *field_names: str) -> object | None:
-    if isinstance(result, dict):
-        result_dict = cast("dict[str, object]", result)
-        for field_name in field_names:
-            if field_name in result_dict:
-                return result_dict[field_name]
-        return None
-
-    for field_name in field_names:
-        if hasattr(result, field_name):
-            return getattr(result, field_name)
-
-    return None
-
-
-def _extract_optional_str(result: object, *field_names: str) -> str | None:
-    if (value := _extract_value(result, *field_names)) is None:
-        return None
-    if not isinstance(value, str):
-        type_name = type(value).__name__
-        msg = f"Expected string metadata field from obstore result, got {type_name}."
-        raise TypeError(msg)
-    return value
-
-
-def _extract_optional_int(result: object, *field_names: str) -> int | None:
-    if (value := _extract_value(result, *field_names)) is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        type_name = type(value).__name__
-        msg = f"Expected integer metadata field from obstore result, got {type_name}."
-        raise TypeError(msg)
-    return value
-
-
 @dataclass(slots=True, kw_only=True, frozen=True)
 class RemoteFile[M: PrimaryKeyMixin]:
     model: M
@@ -157,6 +122,21 @@ class RemoteFile[M: PrimaryKeyMixin]:
             return loaded_session
         return None
 
+    def _required_sync_session(
+        self,
+        *,
+        session: Session | AsyncSession | None,
+        operation: str,
+    ) -> Session:
+        if (resolved_session := self._resolve_sync_session(session=session, model=self.model)) is not None:
+            return resolved_session
+
+        msg = (
+            f"RemoteStorage {operation} requires a resolvable SQLAlchemy session. "
+            "Pass a Session/AsyncSession or ensure the model is attached to one."
+        )
+        raise RuntimeError(msg)
+
     def _prepare_pending_metadata(
         self,
         *,
@@ -186,52 +166,6 @@ class RemoteFile[M: PrimaryKeyMixin]:
         setattr(self.model, self.field_name, updated_metadata)
         return updated_metadata
 
-    def _apply_failed_metadata(self, *, metadata: RemoteMetadata) -> None:
-        failed_metadata = metadata.model_copy(
-            update={
-                "status": "failed",
-                "updated_at": now(),
-            },
-        )
-        setattr(self.model, self.field_name, failed_metadata)
-
-    def _apply_complete_metadata(
-        self,
-        *,
-        metadata: RemoteMetadata,
-        result: object,
-        content_type: str | None,
-    ) -> None:
-        finished_at = now()
-        size_bytes = _extract_optional_int(result, "size_bytes", "size", "bytes")
-        if size_bytes is None:
-            size_bytes = metadata.size_bytes
-        result_content_type = _extract_optional_str(result, "content_type", "contentType", "mime_type")
-        if result_content_type is None:
-            result_content_type = content_type or metadata.content_type
-        etag = _extract_optional_str(result, "etag", "e_tag")
-        if etag is None:
-            etag = metadata.etag
-        checksum = _extract_optional_str(result, "checksum", "sha256")
-        if checksum is None:
-            checksum = metadata.checksum
-        version = _extract_optional_str(result, "version", "version_id")
-        if version is None:
-            version = metadata.version
-
-        completed_metadata = metadata.model_copy(
-            update={
-                "status": "complete",
-                "size_bytes": size_bytes,
-                "content_type": result_content_type,
-                "etag": etag,
-                "checksum": checksum,
-                "version": version,
-                "updated_at": finished_at,
-            },
-        )
-        setattr(self.model, self.field_name, completed_metadata)
-
     def _required_metadata(self) -> RemoteMetadata:
         if (metadata := self.metadata) is None:
             msg = f"Model field '{self.field_name}' has no file metadata."
@@ -253,54 +187,29 @@ class RemoteFile[M: PrimaryKeyMixin]:
         session: Session | None = None,
         flush: bool = False,
     ) -> PutResult:
+        resolved_session = self._required_sync_session(session=session, operation="put")
         metadata = self._prepare_pending_metadata(
             key=key,
             content_type=content_type,
         )
         self._flush_sync(session=session, flush=flush)
-        resolved_session = self._resolve_sync_session(session=session, model=self.model)
-        if resolved_session is not None:
-            payload = snapshot_put_payload(file)
-            enqueue_put_operation(
-                session=resolved_session,
-                model=self.model,
-                field_name=self.field_name,
-                remote_storage=self.remote_storage,
-                metadata=metadata,
-                payload=payload,
-                attributes=attributes,
-                tags=tags,
-                mode=mode,
-                use_multipart=use_multipart,
-                chunk_size=chunk_size,
-                max_concurrency=max_concurrency,
-                content_type=content_type,
-            )
-            return cast("PutResult", {"e_tag": None, "version": None})
-
-        try:
-            result = self.remote_storage.store.put(
-                metadata.key,
-                file,
-                attributes=attributes,
-                tags=tags,
-                mode=mode,
-                use_multipart=use_multipart,
-                chunk_size=chunk_size,
-                max_concurrency=max_concurrency,
-            )
-        except Exception:
-            self._apply_failed_metadata(metadata=metadata)
-            self._flush_sync(session=session, flush=flush)
-            raise
-
-        self._apply_complete_metadata(
+        payload = snapshot_put_payload(file)
+        enqueue_put_operation(
+            session=resolved_session,
+            model=self.model,
+            field_name=self.field_name,
+            remote_storage=self.remote_storage,
             metadata=metadata,
-            result=result,
+            payload=payload,
+            attributes=attributes,
+            tags=tags,
+            mode=mode,
+            use_multipart=use_multipart,
+            chunk_size=chunk_size,
+            max_concurrency=max_concurrency,
             content_type=content_type,
         )
-        self._flush_sync(session=session, flush=flush)
-        return result
+        return cast("PutResult", {"e_tag": None, "version": None})
 
     async def put_async(  # noqa: PLR0913
         self,
@@ -317,54 +226,29 @@ class RemoteFile[M: PrimaryKeyMixin]:
         session: Session | AsyncSession | None = None,
         flush: bool = False,
     ) -> PutResult:
+        resolved_session = self._required_sync_session(session=session, operation="put")
         metadata = self._prepare_pending_metadata(
             key=key,
             content_type=content_type,
         )
         await self._flush_async(session=session, flush=flush)
-        resolved_session = self._resolve_sync_session(session=session, model=self.model)
-        if resolved_session is not None:
-            payload = await snapshot_put_payload_async(file)
-            enqueue_put_operation(
-                session=resolved_session,
-                model=self.model,
-                field_name=self.field_name,
-                remote_storage=self.remote_storage,
-                metadata=metadata,
-                payload=payload,
-                attributes=attributes,
-                tags=tags,
-                mode=mode,
-                use_multipart=use_multipart,
-                chunk_size=chunk_size,
-                max_concurrency=max_concurrency,
-                content_type=content_type,
-            )
-            return cast("PutResult", {"e_tag": None, "version": None})
-
-        try:
-            result = await self.remote_storage.store.put_async(
-                metadata.key,
-                file,
-                attributes=attributes,
-                tags=tags,
-                mode=mode,
-                use_multipart=use_multipart,
-                chunk_size=chunk_size,
-                max_concurrency=max_concurrency,
-            )
-        except Exception:
-            self._apply_failed_metadata(metadata=metadata)
-            await self._flush_async(session=session, flush=flush)
-            raise
-
-        self._apply_complete_metadata(
+        payload = await snapshot_put_payload_async(file)
+        enqueue_put_operation(
+            session=resolved_session,
+            model=self.model,
+            field_name=self.field_name,
+            remote_storage=self.remote_storage,
             metadata=metadata,
-            result=result,
+            payload=payload,
+            attributes=attributes,
+            tags=tags,
+            mode=mode,
+            use_multipart=use_multipart,
+            chunk_size=chunk_size,
+            max_concurrency=max_concurrency,
             content_type=content_type,
         )
-        await self._flush_async(session=session, flush=flush)
-        return result
+        return cast("PutResult", {"e_tag": None, "version": None})
 
     def get(
         self,
@@ -426,18 +310,15 @@ class RemoteFile[M: PrimaryKeyMixin]:
         delete_remote: bool = True,
     ) -> None:
         metadata = self._required_metadata()
-        resolved_session = self._resolve_sync_session(session=session, model=self.model)
         if delete_remote:
-            if resolved_session is not None:
-                enqueue_delete_operation(
-                    session=resolved_session,
-                    model=self.model,
-                    field_name=self.field_name,
-                    remote_storage=self.remote_storage,
-                    metadata=metadata,
-                )
-            else:
-                self.remote_storage.store.delete(metadata.key)
+            resolved_session = self._required_sync_session(session=session, operation="delete")
+            enqueue_delete_operation(
+                session=resolved_session,
+                model=self.model,
+                field_name=self.field_name,
+                remote_storage=self.remote_storage,
+                metadata=metadata,
+            )
         setattr(self.model, self.field_name, None)
         self._flush_sync(session=session, flush=flush)
 
@@ -449,17 +330,14 @@ class RemoteFile[M: PrimaryKeyMixin]:
         delete_remote: bool = True,
     ) -> None:
         metadata = self._required_metadata()
-        resolved_session = self._resolve_sync_session(session=session, model=self.model)
         if delete_remote:
-            if resolved_session is not None:
-                enqueue_delete_operation(
-                    session=resolved_session,
-                    model=self.model,
-                    field_name=self.field_name,
-                    remote_storage=self.remote_storage,
-                    metadata=metadata,
-                )
-            else:
-                await self.remote_storage.store.delete_async(metadata.key)
+            resolved_session = self._required_sync_session(session=session, operation="delete")
+            enqueue_delete_operation(
+                session=resolved_session,
+                model=self.model,
+                field_name=self.field_name,
+                remote_storage=self.remote_storage,
+                metadata=metadata,
+            )
         setattr(self.model, self.field_name, None)
         await self._flush_async(session=session, flush=flush)

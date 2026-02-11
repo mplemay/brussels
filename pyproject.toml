@@ -42,10 +42,7 @@ dev = [
     "ty>=0.0.1a27",
 ]
 all = [
-    "alembic-postgresql-enum",
-    "cryptography>=46.0.4",
-    "obstore",
-    "pydantic>=2,<3",
+    "brussels[alembic,encrypted,file]",
 ]
 
 [tool.uv.build-backend]

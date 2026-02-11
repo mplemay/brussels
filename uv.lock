@@ -73,10 +73,7 @@ file = [
 
 [package.dev-dependencies]
 all = [
-    { name = "alembic-postgresql-enum" },
-    { name = "cryptography" },
-    { name = "obstore" },
-    { name = "pydantic" },
+    { name = "brussels", extra = ["alembic", "encrypted", "file"] },
 ]
 crypto = [
     { name = "cryptography" },
@@ -103,12 +100,7 @@ requires-dist = [
 provides-extras = ["encrypted", "alembic", "file"]
 
 [package.metadata.requires-dev]
-all = [
-    { name = "alembic-postgresql-enum" },
-    { name = "cryptography", specifier = ">=46.0.4" },
-    { name = "obstore" },
-    { name = "pydantic", specifier = ">=2,<3" },
-]
+all = [{ name = "brussels", extras = ["alembic", "encrypted", "file"] }]
 crypto = [{ name = "cryptography", specifier = ">=46.0.4" }]
 dev = [
     { name = "pre-commit", specifier = ">=4.4.0" },

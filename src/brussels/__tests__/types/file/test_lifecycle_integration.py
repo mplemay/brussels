@@ -15,7 +15,12 @@ try:
     from obstore.store import MemoryStore
 
     from brussels.types.file import RemoteFile, RemoteMetadata, RemoteStorage
-    from brussels.types.file.lifecycle import FileLifecycleCoordinator, snapshot_put_payload, snapshot_put_payload_async
+    from brussels.types.file.lifecycle import (
+        DeferredMetadataConsistencyError,
+        FileLifecycleCoordinator,
+        snapshot_put_payload,
+        snapshot_put_payload_async,
+    )
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
@@ -341,6 +346,193 @@ def test_deferred_delete_failure_restores_failed_metadata(engine: Engine) -> Non
         assert metadata.key == "folder/item.txt"
 
 
+def test_metadata_persist_retries_then_succeeds(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    monkeypatch.setattr(FileLifecycleCoordinator, "PERSIST_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    original = FileLifecycleCoordinator._persist_field_update_once
+    attempt_count = 0
+
+    def flaky_persist(*, bind, statement) -> None:
+        nonlocal attempt_count
+        attempt_count += 1
+        if attempt_count < 3:
+            msg = "transient write failure"
+            raise RuntimeError(msg)
+        original(bind=bind, statement=statement)
+
+    monkeypatch.setattr(FileLifecycleCoordinator, "_persist_field_update_once", staticmethod(flaky_persist))
+
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+        model_id = model.id
+        _file_handle(model).put(b"hello", session=session, flush=True)
+        session.commit()
+
+    assert attempt_count == 3
+    assert [name for name, *_ in store_ops.calls] == ["put"]
+    with Session(engine) as read_session:
+        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
+        assert metadata is not None
+        assert metadata.status == "complete"
+
+
+def test_put_persist_exhaustion_compensates_and_raises(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    monkeypatch.setattr(FileLifecycleCoordinator, "PERSIST_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+
+    def always_fail_persist(*, bind, statement) -> None:
+        _ = (bind, statement)
+        msg = "persistent write failure"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(FileLifecycleCoordinator, "_persist_field_update_once", staticmethod(always_fail_persist))
+
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+        _file_handle(model).put(b"hello", session=session, flush=True)
+        with pytest.raises(DeferredMetadataConsistencyError, match="Persisting deferred file metadata update failed"):
+            session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["put", "delete"]
+
+
+def test_delete_persist_exhaustion_after_remote_success_raises(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    monkeypatch.setattr(FileLifecycleCoordinator, "PERSIST_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    def always_fail_persist(*, bind, statement) -> None:
+        _ = (bind, statement)
+        msg = "persistent write failure"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(FileLifecycleCoordinator, "_persist_field_update_once", staticmethod(always_fail_persist))
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+        _file_handle(model).delete(session=session, flush=True)
+        with pytest.raises(DeferredMetadataConsistencyError, match="Persisting deferred file metadata update failed"):
+            session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["delete"]
+
+
+def test_deferred_delete_failure_with_persist_exhaustion_retries_delete(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    monkeypatch.setattr(FileLifecycleCoordinator, "PERSIST_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    def always_fail_persist(*, bind, statement) -> None:
+        _ = (bind, statement)
+        msg = "persistent write failure"
+        raise RuntimeError(msg)
+
+    delete_call_count = 0
+
+    def fail_once_then_succeed(paths: str | tuple[str, ...] | list[str]) -> None:
+        nonlocal delete_call_count
+        delete_call_count += 1
+        store_ops._record("delete", (paths,), {})
+        if delete_call_count == 1:
+            msg = "delete failed"
+            raise RuntimeError(msg)
+
+    monkeypatch.setattr(FileLifecycleCoordinator, "_persist_field_update_once", staticmethod(always_fail_persist))
+    monkeypatch.setattr(store_ops, "delete", fail_once_then_succeed)
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+        _file_handle(model).delete(session=session, flush=True)
+        with pytest.raises(DeferredMetadataConsistencyError, match="Persisting deferred file metadata update failed"):
+            session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["delete", "delete"]
+
+
+def test_deferred_delete_failure_with_persist_exhaustion_failed_compensation_raises(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    monkeypatch.setattr(FileLifecycleCoordinator, "PERSIST_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    def always_fail_persist(*, bind, statement) -> None:
+        _ = (bind, statement)
+        msg = "persistent write failure"
+        raise RuntimeError(msg)
+
+    def always_fail_delete(paths: str | tuple[str, ...] | list[str]) -> None:
+        store_ops._record("delete", (paths,), {})
+        msg = "delete failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(FileLifecycleCoordinator, "_persist_field_update_once", staticmethod(always_fail_persist))
+    monkeypatch.setattr(store_ops, "delete", always_fail_delete)
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+        _file_handle(model).delete(session=session, flush=True)
+        with pytest.raises(DeferredMetadataConsistencyError, match="Persisting deferred file metadata update failed"):
+            session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["delete", "delete"]
+
+
 @pytest.mark.asyncio
 async def test_put_async_with_async_session_shim_defers_until_commit(engine: Engine) -> None:
     store_ops = FakeStoreOps()
@@ -545,16 +737,17 @@ def test_pre_root_queue_executes_when_root_transaction_is_created(engine: Engine
     assert store_ops.calls[0][1][0] == expected_key
 
 
-def test_persist_failure_still_updates_in_memory_metadata(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_persist_failure_raises_consistency_error(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
     store_ops = FakeStoreOps()
     _configure_remote_field(store_ops=store_ops)
-    persisted_payloads: list[RemoteMetadata | None] = []
+    monkeypatch.setattr(FileLifecycleCoordinator, "PERSIST_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
 
-    def fake_persist_field_update(*, session, operation, metadata) -> None:
-        _ = (session, operation)
-        persisted_payloads.append(metadata)
+    def always_fail_persist(*, bind, statement) -> None:
+        _ = (bind, statement)
+        msg = "persistent write failure"
+        raise RuntimeError(msg)
 
-    monkeypatch.setattr(FileLifecycleCoordinator, "_persist_field_update", fake_persist_field_update)
+    monkeypatch.setattr(FileLifecycleCoordinator, "_persist_field_update_once", staticmethod(always_fail_persist))
 
     with Session(engine) as session:
         model = FileModel()
@@ -562,12 +755,8 @@ def test_persist_failure_still_updates_in_memory_metadata(engine: Engine, monkey
         session.flush()
 
         _file_handle(model).put(b"hello", session=session, flush=True)
-        session.commit()
-
-        assert model.file is not None
-        assert model.file.status == "complete"
-
-    assert persisted_payloads
+        with pytest.raises(DeferredMetadataConsistencyError, match="Persisting deferred file metadata update failed"):
+            session.commit()
 
 
 def test_snapshot_put_payload_supports_bytes_buffers_path_and_iterable(tmp_path: Path) -> None:

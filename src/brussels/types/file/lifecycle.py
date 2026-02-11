@@ -5,6 +5,7 @@ from collections.abc import AsyncIterable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
+from time import sleep
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from sqlalchemy import event, update
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
     from typing import IO
 
     from obstore import Attributes, PutMode
+    from sqlalchemy.engine import Connection, Engine
+    from sqlalchemy.sql import Executable
 
     from brussels.mixins import PrimaryKeyMixin
     from brussels.types.file.metadata import RemoteMetadata
@@ -31,6 +34,10 @@ else:
 LOGGER = logging.getLogger(__name__)
 
 Outcome = Literal["commit", "rollback"]
+
+
+class DeferredMetadataConsistencyError(RuntimeError):
+    pass
 
 
 @dataclass(slots=True, kw_only=True)
@@ -73,6 +80,7 @@ class LifecycleState:
 
 class FileLifecycleCoordinator:
     LIFECYCLE_STATE_KEY: Final[str] = "brussels_file_lifecycle_state"
+    PERSIST_RETRY_DELAYS_SECONDS: Final[tuple[float, ...]] = (0.05, 0.1, 0.2)
     _registered: ClassVar[bool] = False
     _register_lock: ClassVar[Lock] = Lock()
 
@@ -261,11 +269,23 @@ class FileLifecycleCoordinator:
         session: Session,
         queued_ops: list[QueuedOperation],
     ) -> None:
+        failures: list[DeferredMetadataConsistencyError] = []
         for operation in queued_ops:
-            if isinstance(operation, QueuedPutOperation):
-                cls._execute_put(session=session, operation=operation)
-                continue
-            cls._execute_delete(session=session, operation=operation)
+            try:
+                if isinstance(operation, QueuedPutOperation):
+                    cls._execute_put(session=session, operation=operation)
+                    continue
+                cls._execute_delete(session=session, operation=operation)
+            except DeferredMetadataConsistencyError as exc:
+                failures.append(exc)
+
+        if not failures:
+            return
+        if len(failures) == 1:
+            raise failures[0]
+
+        msg = f"{len(failures)} deferred file lifecycle operations failed consistency checks."
+        raise DeferredMetadataConsistencyError(msg) from failures[0]
 
     @classmethod
     def _operation_context(
@@ -292,7 +312,15 @@ class FileLifecycleCoordinator:
         metadata: RemoteMetadata | None,
     ) -> None:
         setattr(operation.model, operation.field_name, metadata)
-        cls._persist_field_update(session=session, operation=operation, metadata=metadata)
+        try:
+            cls._persist_field_update(session=session, operation=operation, metadata=metadata)
+        except DeferredMetadataConsistencyError:
+            raise
+        except Exception as exc:
+            raise cls._consistency_error(
+                operation=operation,
+                message="Persisting deferred file metadata update failed.",
+            ) from exc
 
     @classmethod
     def _execute_put(cls, *, session: Session, operation: QueuedPutOperation) -> None:
@@ -324,7 +352,11 @@ class FileLifecycleCoordinator:
             result=result,
             content_type=operation.content_type,
         )
-        cls._set_and_persist_field(session=session, operation=operation, metadata=completed_metadata)
+        try:
+            cls._set_and_persist_field(session=session, operation=operation, metadata=completed_metadata)
+        except DeferredMetadataConsistencyError:
+            cls._compensate_metadata_persist_failure_after_successful_put(operation=operation)
+            raise
 
     @classmethod
     def _cleanup_failed_put(cls, *, operation: QueuedPutOperation) -> None:
@@ -338,6 +370,18 @@ class FileLifecycleCoordinator:
             )
 
     @classmethod
+    def _compensate_metadata_persist_failure_after_successful_put(cls, *, operation: QueuedPutOperation) -> None:
+        if cls._attempt_remote_delete_compensation(
+            operation=operation,
+            log_message="Compensating remote delete after deferred metadata persistence failure for upload",
+        ):
+            return
+        LOGGER.error(
+            "Compensating remote delete failed after deferred metadata persistence failure for upload",
+            extra=cls._operation_context(operation=operation),
+        )
+
+    @classmethod
     def _execute_delete(cls, *, session: Session, operation: QueuedDeleteOperation) -> None:
         try:
             operation.remote_storage.store.delete(operation.metadata.key)
@@ -349,7 +393,14 @@ class FileLifecycleCoordinator:
                     "updated_at": now(),
                 },
             )
-            cls._set_and_persist_field(session=session, operation=operation, metadata=failed_metadata)
+            try:
+                cls._set_and_persist_field(session=session, operation=operation, metadata=failed_metadata)
+            except DeferredMetadataConsistencyError:
+                cls._attempt_remote_delete_compensation(
+                    operation=operation,
+                    log_message="Compensating remote delete retry after deferred delete persistence failure",
+                )
+                raise
             return
 
         cls._set_and_persist_field(session=session, operation=operation, metadata=None)
@@ -368,7 +419,10 @@ class FileLifecycleCoordinator:
                 "Could not persist deferred file metadata update",
                 extra={"model": operation.model_type.__name__, "field_name": operation.field_name},
             )
-            return
+            raise cls._consistency_error(
+                operation=operation,
+                message="Could not persist deferred file metadata update.",
+            )
 
         bind = session.get_bind()
         statement = (
@@ -377,15 +431,84 @@ class FileLifecycleCoordinator:
             .values({operation.field_name: metadata})
         )
 
+        cls._persist_field_update_with_retries(operation=operation, bind=bind, statement=statement)
+
+    @classmethod
+    def _persist_field_update_with_retries(
+        cls,
+        *,
+        operation: QueuedPutOperation | QueuedDeleteOperation,
+        bind: Engine | Connection,
+        statement: Executable,
+    ) -> None:
+        attempt = 0
+        max_attempts = len(cls.PERSIST_RETRY_DELAYS_SECONDS) + 1
+
+        while True:
+            attempt += 1
+            try:
+                cls._persist_field_update_once(bind=bind, statement=statement)
+            except Exception as exc:
+                if attempt >= max_attempts:
+                    LOGGER.exception(
+                        "Persisting deferred file metadata update failed",
+                        extra=cls._operation_context(operation=operation, include_key=False),
+                    )
+                    raise cls._consistency_error(
+                        operation=operation,
+                        message="Persisting deferred file metadata update failed.",
+                    ) from exc
+
+                delay = cls.PERSIST_RETRY_DELAYS_SECONDS[attempt - 1]
+                LOGGER.warning(
+                    "Deferred metadata persistence retry scheduled",
+                    extra={
+                        **cls._operation_context(operation=operation, include_key=False),
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "retry_delay_seconds": delay,
+                    },
+                    exc_info=True,
+                )
+                sleep(delay)
+            else:
+                return
+
+    @staticmethod
+    def _persist_field_update_once(*, bind: Engine | Connection, statement: Executable) -> None:
+        with Session(bind=bind) as write_session:
+            write_session.execute(statement)
+            write_session.commit()
+
+    @classmethod
+    def _consistency_error(
+        cls,
+        *,
+        operation: QueuedPutOperation | QueuedDeleteOperation,
+        message: str,
+    ) -> DeferredMetadataConsistencyError:
+        context = cls._operation_context(operation=operation)
+        full_message = (
+            f"{message} model={context['model']} model_id={context['model_id']} "
+            f"field_name={context['field_name']} key={context['key']}"
+        )
+        return DeferredMetadataConsistencyError(full_message)
+
+    @classmethod
+    def _attempt_remote_delete_compensation(
+        cls,
+        *,
+        operation: QueuedPutOperation | QueuedDeleteOperation,
+        log_message: str,
+    ) -> bool:
         try:
-            with Session(bind=bind) as write_session:
-                write_session.execute(statement)
-                write_session.commit()
-        except Exception:
-            LOGGER.exception(
-                "Persisting deferred file metadata update failed",
-                extra=cls._operation_context(operation=operation, include_key=False),
-            )
+            operation.remote_storage.store.delete(operation.metadata.key)
+        except Exception:  # noqa: BLE001
+            LOGGER.warning(log_message, extra=cls._operation_context(operation=operation), exc_info=True)
+            return False
+
+        LOGGER.info(log_message, extra=cls._operation_context(operation=operation))
+        return True
 
     @classmethod
     def _build_complete_metadata(

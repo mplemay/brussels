@@ -10,7 +10,7 @@ from brussels.base import Base
 try:
     from obstore.store import MemoryStore
 
-    from brussels.types import RemoteFile, RemoteFileMetadata
+    from brussels.types import RemoteFile, RemoteStorage
 except ModuleNotFoundError as exc:
     msg = "This example requires optional dependencies. Install with: pip install 'brussels[files]'"
     raise SystemExit(msg) from exc
@@ -20,8 +20,8 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    file: Mapped[RemoteFileMetadata | None] = mapped_column(
-        RemoteFile(
+    file: Mapped[RemoteFile | None] = mapped_column(
+        RemoteStorage(
             store=MemoryStore(),
         ),
         nullable=True,

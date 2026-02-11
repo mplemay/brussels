@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from brussels.base import Base
 
 try:
-    from brussels.types import RemoteFile, RemoteFileMetadata, UploadStatus
+    from brussels.types import RemoteFile, RemoteStorage, UploadStatus
 except ModuleNotFoundError:
     pytest.skip("pydantic optional dependency not installed", allow_module_level=True)
 
@@ -24,7 +24,7 @@ class FileRecord(Base):
     __tablename__ = "file_records"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    file: Mapped[RemoteFileMetadata | None] = mapped_column(RemoteFile(store=object()), nullable=True)
+    file: Mapped[RemoteFile | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
 
 
 @pytest.fixture
@@ -37,17 +37,17 @@ def engine() -> Iterator[Engine]:
 
 
 def test_remote_file_compiles_to_jsonb_for_postgres() -> None:
-    compiled = RemoteFile(store=object()).compile(dialect=postgres_dialect())
+    compiled = RemoteStorage(store=object()).compile(dialect=postgres_dialect())
     assert "JSONB" in compiled
 
 
 def test_remote_file_compiles_to_json_for_sqlite() -> None:
-    compiled = RemoteFile(store=object()).compile(dialect=sqlite_dialect())
+    compiled = RemoteStorage(store=object()).compile(dialect=sqlite_dialect())
     assert "JSON" in compiled
 
 
 def test_build_key_is_deterministic_model_id_and_field() -> None:
-    remote_file = RemoteFile(store=object())
+    remote_file = RemoteStorage(store=object())
 
     assert remote_file.build_key(model_id="abc", field_name="file") == "abc/file"
     assert remote_file.build_key(model_id=42, field_name="file") == "42/file"
@@ -55,21 +55,21 @@ def test_build_key_is_deterministic_model_id_and_field() -> None:
 
 def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
     with pytest.raises(TypeError):
-        RemoteFile(store=object(), key_prefix="uploads")  # type: ignore[call-arg]
+        RemoteStorage(store=object(), key_prefix="uploads")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
-        RemoteFile(store=object(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
+        RemoteStorage(store=object(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
 
 
 def test_process_bind_param_serializes_metadata() -> None:
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-    metadata = RemoteFileMetadata(
+    metadata = RemoteFile(
         key="example/file.txt",
         status=UploadStatus.PENDING,
         created_at=now,
         updated_at=now,
     )
 
-    bound = RemoteFile(store=object()).process_bind_param(metadata, None)
+    bound = RemoteStorage(store=object()).process_bind_param(metadata, None)
 
     assert bound is not None
     assert bound["key"] == "example/file.txt"
@@ -78,8 +78,8 @@ def test_process_bind_param_serializes_metadata() -> None:
 
 
 def test_process_bind_param_rejects_invalid_value_type() -> None:
-    with pytest.raises(ValueError, match="RemoteFile metadata is invalid"):
-        RemoteFile(store=object()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="RemoteStorage RemoteFile metadata is invalid"):
+        RemoteStorage(store=object()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
 
 
 def test_process_result_value_returns_typed_metadata() -> None:
@@ -100,9 +100,9 @@ def test_process_result_value_returns_typed_metadata() -> None:
         "error_message": None,
     }
 
-    metadata = RemoteFile(store=object()).process_result_value(raw, None)
+    metadata = RemoteStorage(store=object()).process_result_value(raw, None)
 
-    assert isinstance(metadata, RemoteFileMetadata)
+    assert isinstance(metadata, RemoteFile)
     assert metadata.status is UploadStatus.COMPLETE
     assert metadata.size_bytes == 8
 
@@ -117,7 +117,7 @@ def test_process_result_value_rejects_legacy_store_name_field() -> None:
     }
 
     with pytest.raises(ValueError, match="metadata from database is invalid"):
-        RemoteFile(store=object()).process_result_value(raw, None)
+        RemoteStorage(store=object()).process_result_value(raw, None)
 
 
 def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
@@ -126,7 +126,7 @@ def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
 
     with Session(engine) as session:
         record = FileRecord(
-            file=RemoteFileMetadata(
+            file=RemoteFile(
                 bucket="bucket",
                 key="example/file.txt",
                 status=UploadStatus.PENDING,
@@ -138,6 +138,6 @@ def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
         session.commit()
         session.refresh(record)
 
-        assert isinstance(record.file, RemoteFileMetadata)
+        assert isinstance(record.file, RemoteFile)
         assert record.file.status is UploadStatus.PENDING
         assert record.file.key == "example/file.txt"

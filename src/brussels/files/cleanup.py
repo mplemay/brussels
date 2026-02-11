@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
-from brussels.types import RemoteFileMetadata, UploadStatus
+from brussels.types import RemoteFile, UploadStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -19,7 +19,7 @@ def _ensure_utc(value: datetime) -> datetime:
 
 
 def is_cleanup_candidate(
-    metadata: RemoteFileMetadata | None,
+    metadata: RemoteFile | None,
     *,
     now: datetime,
     stale_after: timedelta,
@@ -39,7 +39,7 @@ def is_cleanup_candidate(
 def find_cleanup_candidates(
     items: list[T],
     *,
-    extractor: Callable[[T], RemoteFileMetadata | None],
+    extractor: Callable[[T], RemoteFile | None],
     now: datetime,
     stale_after: timedelta,
 ) -> list[T]:

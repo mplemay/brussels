@@ -98,7 +98,7 @@ def _extract_optional_int(result: object, *field_names: str) -> int | None:
     return value
 
 
-class RemoteFileMetadata(BaseModel):
+class RemoteFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = 1
@@ -133,7 +133,7 @@ class RemoteFileMetadata(BaseModel):
         return cls.model_validate(data)
 
 
-class RemoteFile(TypeDecorator[RemoteFileMetadata]):
+class RemoteStorage(TypeDecorator[RemoteFile]):
     impl = JSON
     cache_ok = False
 
@@ -157,15 +157,15 @@ class RemoteFile(TypeDecorator[RemoteFileMetadata]):
 
     def process_bind_param(
         self,
-        value: RemoteFileMetadata | RemoteFileDict | None,
+        value: RemoteFile | RemoteFileDict | None,
         _dialect: object,
     ) -> RemoteFileDict | None:  # type: ignore[override]
         if value is None:
             return None
         try:
-            metadata = value if isinstance(value, RemoteFileMetadata) else RemoteFileMetadata.from_dict(value)
+            metadata = value if isinstance(value, RemoteFile) else RemoteFile.from_dict(value)
         except ValidationError as exc:
-            msg = "RemoteFile metadata is invalid."
+            msg = "RemoteStorage RemoteFile metadata is invalid."
             raise ValueError(msg) from exc
         return metadata.to_dict()
 
@@ -173,17 +173,17 @@ class RemoteFile(TypeDecorator[RemoteFileMetadata]):
         self,
         value: object,
         _dialect: object,
-    ) -> RemoteFileMetadata | None:  # type: ignore[override]
+    ) -> RemoteFile | None:  # type: ignore[override]
         if value is None:
             return None
         if not isinstance(value, dict):
             type_name = type(value).__name__
-            msg = f"RemoteFile expected dict from database, got {type_name}."
+            msg = f"RemoteStorage expected dict from database, got {type_name}."
             raise TypeError(msg)
         try:
-            return RemoteFileMetadata.from_dict(cast("RemoteFileDict", value))
+            return RemoteFile.from_dict(cast("RemoteFileDict", value))
         except ValidationError as exc:
-            msg = "RemoteFile metadata from database is invalid."
+            msg = "RemoteStorage RemoteFile metadata from database is invalid."
             raise ValueError(msg) from exc
 
     def _resolve_store_ops(self) -> _StoreOps:
@@ -192,7 +192,7 @@ class RemoteFile(TypeDecorator[RemoteFileMetadata]):
         if _obstore_store is not None:
             return _obstore_store
         msg = (
-            "RemoteFile operations require the optional dependency 'obstore'. "
+            "RemoteStorage operations require the optional dependency 'obstore'. "
             "Install with `pip install brussels[files]`."
         )
         raise ModuleNotFoundError(msg)
@@ -201,7 +201,7 @@ class RemoteFile(TypeDecorator[RemoteFileMetadata]):
     def _model_id(model: SupportsFileId) -> str:
         model_id = getattr(model, "id", None)
         if model_id is None:
-            msg = "RemoteFile operations require model.id to be set."
+            msg = "RemoteStorage operations require model.id to be set."
             raise ValueError(msg)
         if not isinstance(model_id, str | int | UUID):
             type_name = type(model_id).__name__
@@ -218,18 +218,18 @@ class RemoteFile(TypeDecorator[RemoteFileMetadata]):
             await maybe_awaitable
 
     @staticmethod
-    def _get_metadata(*, model: object, field_name: str) -> RemoteFileMetadata | None:
+    def _get_metadata(*, model: object, field_name: str) -> RemoteFile | None:
         value = getattr(model, field_name)
         if value is None:
             return None
-        if isinstance(value, RemoteFileMetadata):
+        if isinstance(value, RemoteFile):
             return value
         if isinstance(value, dict):
-            metadata = RemoteFileMetadata.from_dict(value)
+            metadata = RemoteFile.from_dict(value)
             setattr(model, field_name, metadata)
             return metadata
         type_name = type(value).__name__
-        msg = f"Model field '{field_name}' must hold RemoteFileMetadata | dict | None, got {type_name}."
+        msg = f"Model field '{field_name}' must hold RemoteFile | dict | None, got {type_name}."
         raise TypeError(msg)
 
     async def _put(self, *args: object, **kwargs: object) -> object:
@@ -258,12 +258,12 @@ class RemoteFile(TypeDecorator[RemoteFileMetadata]):
         session: Session | AsyncSession | None = None,
         flush: bool = False,
         **put_kwargs: object,
-    ) -> RemoteFileMetadata:
+    ) -> RemoteFile:
         del filename
         metadata = self._get_metadata(model=model, field_name=field_name)
         if metadata is None:
             now = self.now()
-            metadata = RemoteFileMetadata(
+            metadata = RemoteFile(
                 bucket=bucket,
                 key=key or self.build_key(model_id=self._model_id(model), field_name=field_name),
                 url=url,
@@ -384,17 +384,17 @@ class RemoteFile(TypeDecorator[RemoteFileMetadata]):
         await self._flush(session=session, flush=flush)
 
 
-def _resolve_remote_file(model: object, *, field_name: str) -> RemoteFile:
+def _resolve_remote_storage(model: object, *, field_name: str) -> RemoteStorage:
     table = getattr(type(model), "__table__", None)
     if table is None:
-        msg = "RemoteFile operations require SQLAlchemy model instances with __table__ metadata."
+        msg = "RemoteStorage operations require SQLAlchemy model instances with __table__ metadata."
         raise TypeError(msg)
     if field_name not in table.c:
         msg = f"Model does not define column '{field_name}'."
         raise ValueError(msg)
     column_type = table.c[field_name].type
-    if not isinstance(column_type, RemoteFile):
-        msg = f"Model column '{field_name}' must use brussels.types.RemoteFile."
+    if not isinstance(column_type, RemoteStorage):
+        msg = f"Model column '{field_name}' must use brussels.types.RemoteStorage."
         raise TypeError(msg)
     return column_type
 
@@ -411,9 +411,9 @@ async def _model_upload(  # noqa: PLR0913
     session: Session | AsyncSession | None = None,
     flush: bool = False,
     **put_kwargs: object,
-) -> RemoteFileMetadata:
-    remote_file = _resolve_remote_file(self, field_name="file")
-    return await remote_file.upload(
+) -> RemoteFile:
+    remote_storage = _resolve_remote_storage(self, field_name="file")
+    return await remote_storage.upload(
         model=cast("SupportsFileId", self),
         field_name="file",
         data=data,
@@ -429,13 +429,13 @@ async def _model_upload(  # noqa: PLR0913
 
 
 async def _model_download(self: object, **kwargs: object) -> object:
-    remote_file = _resolve_remote_file(self, field_name="file")
-    return await remote_file.download(model=self, field_name="file", **kwargs)
+    remote_storage = _resolve_remote_storage(self, field_name="file")
+    return await remote_storage.download(model=self, field_name="file", **kwargs)
 
 
 async def _model_read_range(self: object, start: int, end: int, **kwargs: object) -> object:
-    remote_file = _resolve_remote_file(self, field_name="file")
-    return await remote_file.read_range(model=self, field_name="file", start=start, end=end, **kwargs)
+    remote_storage = _resolve_remote_storage(self, field_name="file")
+    return await remote_storage.read_range(model=self, field_name="file", start=start, end=end, **kwargs)
 
 
 async def _model_delete(
@@ -446,8 +446,8 @@ async def _model_delete(
     delete_remote: bool = True,
     **delete_kwargs: object,
 ) -> None:
-    remote_file = _resolve_remote_file(self, field_name="file")
-    await remote_file.delete_file(
+    remote_storage = _resolve_remote_storage(self, field_name="file")
+    await remote_storage.delete_file(
         model=self,
         field_name="file",
         session=session,
@@ -462,7 +462,7 @@ def _attach_file_methods(_mapper: Mapper[object], cls: type[object]) -> None:
     if table is None or "file" not in table.c:
         return
     column_type = table.c["file"].type
-    if not isinstance(column_type, RemoteFile):
+    if not isinstance(column_type, RemoteStorage):
         return
 
     if "upload" not in cls.__dict__:

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from brussels.base import Base
 
 try:
-    from brussels.types import RemoteFile, RemoteFileMetadata, UploadStatus
+    from brussels.types import RemoteFile, RemoteStorage, UploadStatus
 except ModuleNotFoundError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
@@ -18,7 +18,7 @@ class FileModel(Base):
     __tablename__ = "file_model"
 
     id: Mapped[str | int | None] = mapped_column(primary_key=True)
-    file: Mapped[RemoteFileMetadata | None] = mapped_column(RemoteFile(store=object()), nullable=True)
+    file: Mapped[RemoteFile | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
 
 
 class SyncSessionSpy:
@@ -81,7 +81,7 @@ def _clock(values: list[datetime]):
 
 
 def _configure_remote_file(*, store_ops: FakeStoreOps, now_values: list[datetime]) -> None:
-    remote_file = cast("RemoteFile", FileModel.__table__.c.file.type)
+    remote_file = cast("RemoteStorage", FileModel.__table__.c.file.type)
     remote_file.store_ops = store_ops
     remote_file.now = _clock(now_values)
 
@@ -154,7 +154,7 @@ async def test_reupload_bucket_behavior() -> None:
     )
     model = FileModel(
         id="user-123",
-        file=RemoteFileMetadata(
+        file=RemoteFile(
             bucket="existing-bucket",
             key="user-123/file",
             status=UploadStatus.PENDING,
@@ -177,7 +177,7 @@ async def test_download_read_range_and_delete() -> None:
         store_ops=store_ops,
         now_values=[datetime(2025, 1, 1, 12, 1, tzinfo=UTC)],
     )
-    metadata = RemoteFileMetadata(
+    metadata = RemoteFile(
         key="folder/item.txt",
         status=UploadStatus.COMPLETE,
         created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),

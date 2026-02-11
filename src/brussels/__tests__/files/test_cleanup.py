@@ -7,18 +7,18 @@ import pytest
 
 try:
     from brussels.files import find_cleanup_candidates, is_cleanup_candidate
-    from brussels.types import RemoteFileMetadata, UploadStatus
+    from brussels.types import RemoteFile, UploadStatus
 except ModuleNotFoundError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
 
 @dataclass
 class Row:
-    file: RemoteFileMetadata | None
+    file: RemoteFile | None
 
 
-def _metadata(*, status: UploadStatus, updated_at: datetime) -> RemoteFileMetadata:
-    return RemoteFileMetadata(
+def _metadata(*, status: UploadStatus, updated_at: datetime) -> RemoteFile:
+    return RemoteFile(
         key="folder/item.txt",
         status=status,
         created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),

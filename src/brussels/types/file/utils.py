@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
-from brussels.types.file.file import RemoteFile, RemoteMetadataField
+from brussels.types.file.file import RemoteFile
 from brussels.utils import utc
 
 if TYPE_CHECKING:
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from brussels.mixins import PrimaryKeyMixin
+    from brussels.types.file._types import RemoteMetadataField
     from brussels.types.file.metadata import RemoteMetadata
 
 T = TypeVar("T")

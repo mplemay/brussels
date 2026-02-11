@@ -14,22 +14,16 @@ from sqlalchemy.orm import Session, SessionTransaction
 from brussels.utils import now
 
 if TYPE_CHECKING:
-    from collections.abc import Buffer, Callable, Iterator
-    from typing import IO
+    from collections.abc import Callable
 
     from obstore import Attributes, PutMode
     from sqlalchemy.engine import Connection, Engine
     from sqlalchemy.sql import Executable
 
     from brussels.mixins import PrimaryKeyMixin
+    from brussels.types.file._types import PutAsyncInput, PutInput
     from brussels.types.file.metadata import RemoteMetadata
     from brussels.types.file.storage import RemoteStorage
-
-    type PutInput = IO[bytes] | Path | bytes | Buffer | Iterator[Buffer] | Iterable[Buffer]
-    type PutAsyncInput = PutInput | AsyncIterable[Buffer]
-else:
-    type PutInput = object
-    type PutAsyncInput = object
 
 LOGGER = logging.getLogger(__name__)
 
@@ -606,7 +600,7 @@ def enqueue_put_operation(  # noqa: PLR0913
     max_concurrency: int,
     content_type: str | None,
 ) -> None:
-    return FileLifecycleCoordinator.enqueue_put_operation(
+    FileLifecycleCoordinator.enqueue_put_operation(
         session=session,
         model=model,
         field_name=field_name,

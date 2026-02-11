@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Self, cast
 from uuid import UUID
 
 from sqlalchemy.orm import Session, object_session
-from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from brussels.mixins import PrimaryKeyMixin
 from brussels.types.file.lifecycle import (
@@ -20,30 +19,11 @@ from brussels.types.file.storage import RemoteStorage
 from brussels.utils import now
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator, Buffer, Iterable, Iterator
-    from pathlib import Path
-    from typing import IO
-
     from obstore import Attributes, GetOptions, PutMode, PutResult
     from obstore._obstore import Bytes, GetResult
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    type PutInput = IO[bytes] | Path | bytes | Buffer | Iterator[Buffer] | Iterable[Buffer]
-    type PutAsyncInput = (
-        IO[bytes]
-        | Path
-        | bytes
-        | Buffer
-        | AsyncIterator[Buffer]
-        | AsyncIterable[Buffer]
-        | Iterator[Buffer]
-        | Iterable[Buffer]
-    )
-else:
-    type PutInput = object
-    type PutAsyncInput = object
-
-type RemoteMetadataField = InstrumentedAttribute[RemoteMetadata | None]
+    from brussels.types.file._types import PutAsyncInput, PutInput, RemoteMetadataField
 
 
 @dataclass(slots=True, kw_only=True, frozen=True)
@@ -192,7 +172,7 @@ class RemoteFile[M: PrimaryKeyMixin]:
             key=key,
             content_type=content_type,
         )
-        self._flush_sync(session=session, flush=flush)
+        self._flush_sync(session=session or resolved_session, flush=flush)
         payload = snapshot_put_payload(file)
         enqueue_put_operation(
             session=resolved_session,
@@ -231,7 +211,7 @@ class RemoteFile[M: PrimaryKeyMixin]:
             key=key,
             content_type=content_type,
         )
-        await self._flush_async(session=session, flush=flush)
+        await self._flush_async(session=session or resolved_session, flush=flush)
         payload = await snapshot_put_payload_async(file)
         enqueue_put_operation(
             session=resolved_session,
@@ -320,7 +300,10 @@ class RemoteFile[M: PrimaryKeyMixin]:
                 metadata=metadata,
             )
         setattr(self.model, self.field_name, None)
-        self._flush_sync(session=session, flush=flush)
+        self._flush_sync(
+            session=session or self._resolve_sync_session(session=None, model=self.model),
+            flush=flush,
+        )
 
     async def delete_async(
         self,
@@ -340,4 +323,7 @@ class RemoteFile[M: PrimaryKeyMixin]:
                 metadata=metadata,
             )
         setattr(self.model, self.field_name, None)
-        await self._flush_async(session=session, flush=flush)
+        await self._flush_async(
+            session=session or self._resolve_sync_session(session=None, model=self.model),
+            flush=flush,
+        )

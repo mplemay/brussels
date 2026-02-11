@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 import brussels.types.file.lifecycle as file_lifecycle
@@ -30,8 +30,9 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from brussels.types.file.lifecycle import PutInput
+    from brussels.types.file._types import PutInput
 
+from brussels.__tests__.types.file.conftest import FakeStoreOps
 
 pytestmark = pytest.mark.integration
 
@@ -48,63 +49,6 @@ class AsyncSessionShim:
 
     async def flush(self) -> None:
         self.sync_session.flush()
-
-
-class FakeStoreOps:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-        self.put_error: Exception | None = None
-        self.delete_error: Exception | None = None
-        self.put_response: object = {
-            "size_bytes": 5,
-            "content_type": "text/plain",
-            "etag": "etag-123",
-            "checksum": "sum-123",
-            "version": "v1",
-        }
-
-    def _record(self, name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
-        self.calls.append((name, args, kwargs))
-
-    def put(
-        self,
-        path: str,
-        file: object,
-        *,
-        attributes: object | None = None,
-        tags: dict[str, str] | None = None,
-        mode: object | None = None,
-        use_multipart: bool | None = None,
-        chunk_size: int = 5 * 1024 * 1024,
-        max_concurrency: int = 12,
-    ) -> object:
-        self._record(
-            "put",
-            (path, file),
-            {
-                "attributes": attributes,
-                "tags": tags,
-                "mode": mode,
-                "use_multipart": use_multipart,
-                "chunk_size": chunk_size,
-                "max_concurrency": max_concurrency,
-            },
-        )
-        if self.put_error is not None:
-            raise self.put_error
-        return self.put_response
-
-    def delete(self, paths: str | tuple[str, ...] | list[str]) -> None:
-        self._record("delete", (paths,), {})
-        if self.delete_error is not None:
-            raise self.delete_error
-
-
-@pytest.fixture
-def engine() -> Engine:
-    engine = create_engine("sqlite:///:memory:")
-    DataclassBase.metadata.create_all(engine)
-    return engine
 
 
 def _configure_remote_field(*, store_ops: FakeStoreOps) -> None:
@@ -796,3 +740,134 @@ async def test_snapshot_put_payload_async_supports_async_iterable() -> None:
         yield memoryview(b"c")
 
     assert await snapshot_put_payload_async(chunks()) == b"abc"
+
+
+def test_put_auto_detected_session_flush(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+
+        _file_handle(model).put(b"hello", flush=True)
+
+        assert model not in session.dirty
+        assert model.file is not None
+        assert model.file.status == "pending"
+        session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["put"]
+
+
+@pytest.mark.asyncio
+async def test_put_async_auto_detected_session_flush(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+
+    with Session(engine) as session:
+        model = FileModel()
+        session.add(model)
+        session.flush()
+
+        await _file_handle(model).put_async(b"hello", flush=True)
+
+        assert model not in session.dirty
+        assert model.file is not None
+        assert model.file.status == "pending"
+        session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["put"]
+
+
+def test_delete_auto_detected_session_flush(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+
+        _file_handle(model).delete(flush=True)
+
+        assert model not in session.dirty
+        assert model.file is None
+        session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["delete"]
+
+
+@pytest.mark.asyncio
+async def test_delete_async_auto_detected_session_flush(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+
+        await _file_handle(model).delete_async(flush=True)
+
+        assert model not in session.dirty
+        assert model.file is None
+        session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["delete"]
+
+
+def test_delete_no_session_delete_remote_false_flush(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+
+        _file_handle(model).delete(delete_remote=False, flush=True)
+
+        assert model not in session.dirty
+        assert model.file is None
+        assert store_ops.calls == []

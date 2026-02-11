@@ -9,10 +9,10 @@ try:
 except ModuleNotFoundError as exc:
     raise ImportError(_FILE_IMPORT_ERROR) from exc
 else:
-    from .helpers import cleanup_remote_fields, find_cleanup_candidates, is_cleanup_candidate
+    from .file import RemoteFile
     from .metadata import RemoteMetadata
-    from .remote_file import RemoteFile
     from .storage import RemoteStorage
+    from .utils import cleanup_remote_fields, find_cleanup_candidates, is_cleanup_candidate
 
 __all__ = [
     "RemoteFile",

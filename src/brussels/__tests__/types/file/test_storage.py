@@ -12,6 +12,8 @@ from brussels.base import DataclassBase
 from brussels.mixins import PrimaryKeyMixin
 
 try:
+    from obstore.store import MemoryStore  # ty: ignore[unresolved-import]
+
     from brussels.types.file import (
         RemoteFile,
         RemoteMetadata,
@@ -29,9 +31,9 @@ if TYPE_CHECKING:
 class FileModel(DataclassBase, PrimaryKeyMixin):
     __tablename__ = "file_model"
 
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True, default=None)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True, default=None)
     attachment: Mapped[RemoteMetadata | None] = mapped_column(
-        RemoteStorage(store=object()),
+        RemoteStorage(store=MemoryStore()),
         nullable=True,
         default=None,
     )
@@ -40,7 +42,7 @@ class FileModel(DataclassBase, PrimaryKeyMixin):
 class OtherFileModel(DataclassBase, PrimaryKeyMixin):
     __tablename__ = "other_file_model"
 
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True, default=None)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True, default=None)
 
 
 class SyncSessionSpy:
@@ -110,17 +112,17 @@ def _attachment_handle(model: FileModel) -> RemoteFile:
 
 
 def test_remote_file_compiles_to_jsonb_for_postgres() -> None:
-    compiled = RemoteStorage(store=object()).compile(dialect=postgres_dialect())
+    compiled = RemoteStorage(store=MemoryStore()).compile(dialect=postgres_dialect())
     assert "JSONB" in compiled
 
 
 def test_remote_file_compiles_to_json_for_sqlite() -> None:
-    compiled = RemoteStorage(store=object()).compile(dialect=sqlite_dialect())
+    compiled = RemoteStorage(store=MemoryStore()).compile(dialect=sqlite_dialect())
     assert "JSON" in compiled
 
 
 def test_build_key_is_deterministic_model_id_and_field() -> None:
-    remote_file = RemoteStorage(store=object())
+    remote_file = RemoteStorage(store=MemoryStore())
 
     assert remote_file.build_key(model_id="abc", field_name="file") == "abc/file"
     assert remote_file.build_key(model_id=42, field_name="file") == "42/file"
@@ -128,9 +130,9 @@ def test_build_key_is_deterministic_model_id_and_field() -> None:
 
 def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
     with pytest.raises(TypeError):
-        RemoteStorage(store=object(), key_prefix="uploads")  # type: ignore[call-arg]
+        RemoteStorage(store=MemoryStore(), key_prefix="uploads")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
-        RemoteStorage(store=object(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
+        RemoteStorage(store=MemoryStore(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
 
 
 def test_from_metadata_resolves_remote_storage_for_mapped_field() -> None:

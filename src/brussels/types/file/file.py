@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 type RemoteMetadataField = InstrumentedAttribute[RemoteMetadata | None]
 
 
-@dataclass(slots=True, kw_only=True)
+@dataclass(slots=True, kw_only=True, frozen=True)
 class RemoteFile[M: PrimaryKeyMixin]:
     model: M
     field_name: str

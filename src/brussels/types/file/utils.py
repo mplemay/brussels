@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
-from brussels.types.file.remote_file import RemoteFile, RemoteMetadataField
+from brussels.types.file.file import RemoteFile, RemoteMetadataField
 from brussels.utils import utc
 
 if TYPE_CHECKING:

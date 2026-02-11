@@ -9,6 +9,8 @@ from brussels.base import Base, DataclassBase
 from brussels.mixins import PrimaryKeyMixin
 
 try:
+    from obstore.store import MemoryStore  # ty: ignore[unresolved-import]
+
     from brussels.types.file import RemoteFile, RemoteMetadata, RemoteStorage
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
@@ -18,13 +20,13 @@ class NoPrimaryKeyMixinModel(Base):
     __tablename__ = "no_primary_key_mixin_models"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True)
 
 
 class PrimaryKeyMixinModel(DataclassBase, PrimaryKeyMixin):
     __tablename__ = "primary_key_mixin_models"
 
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True, default=None)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True, default=None)
 
 
 def test_from_metadata_rejects_models_without_primary_key_mixin() -> None:

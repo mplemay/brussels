@@ -18,10 +18,10 @@ def test_file_module_import_error_guides_files_extra(monkeypatch: pytest.MonkeyP
 
     for module_name in [
         "brussels.types.file",
+        "brussels.types.file.file",
         "brussels.types.file.metadata",
-        "brussels.types.file.remote_file",
         "brussels.types.file.storage",
-        "brussels.types.file.helpers",
+        "brussels.types.file.utils",
     ]:
         sys.modules.pop(module_name, None)
 

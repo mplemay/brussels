@@ -10,6 +10,8 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from brussels.base import Base
 
 try:
+    from obstore.store import MemoryStore  # ty: ignore[unresolved-import]
+
     from brussels.types.file import RemoteMetadata, RemoteStorage
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
@@ -22,7 +24,7 @@ class FileRecord(Base):
     __tablename__ = "file_records"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True)
 
 
 @pytest.fixture
@@ -43,7 +45,7 @@ def test_process_bind_param_serializes_metadata() -> None:
         updated_at=now,
     )
 
-    bound = RemoteStorage(store=object()).process_bind_param(metadata, None)
+    bound = RemoteStorage(store=MemoryStore()).process_bind_param(metadata, None)
 
     assert bound is not None
     assert bound["schema"] == 1
@@ -54,7 +56,7 @@ def test_process_bind_param_serializes_metadata() -> None:
 
 def test_process_bind_param_rejects_invalid_value_type() -> None:
     with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata is invalid"):
-        RemoteStorage(store=object()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
+        RemoteStorage(store=MemoryStore()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
 
 
 def test_process_result_value_returns_typed_metadata() -> None:
@@ -75,7 +77,7 @@ def test_process_result_value_returns_typed_metadata() -> None:
         "error_message": None,
     }
 
-    metadata = RemoteStorage(store=object()).process_result_value(raw, None)
+    metadata = RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
 
     assert isinstance(metadata, RemoteMetadata)
     assert metadata.status == "complete"
@@ -92,7 +94,7 @@ def test_process_result_value_rejects_legacy_store_name_field() -> None:
     }
 
     with pytest.raises(ValueError, match="metadata from database is invalid"):
-        RemoteStorage(store=object()).process_result_value(raw, None)
+        RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
 
 
 def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from brussels.base import Base
 
 try:
-    from brussels.types.file import RemoteMetadata, RemoteStorage, UploadStatus
+    from brussels.types.file import RemoteMetadata, RemoteStorage
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
@@ -38,7 +38,7 @@ def test_process_bind_param_serializes_metadata() -> None:
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     metadata = RemoteMetadata(
         key="example/file.txt",
-        status=UploadStatus.PENDING,
+        status="pending",
         created_at=now,
         updated_at=now,
     )
@@ -78,7 +78,7 @@ def test_process_result_value_returns_typed_metadata() -> None:
     metadata = RemoteStorage(store=object()).process_result_value(raw, None)
 
     assert isinstance(metadata, RemoteMetadata)
-    assert metadata.status is UploadStatus.COMPLETE
+    assert metadata.status == "complete"
     assert metadata.size_bytes == 8
 
 
@@ -104,7 +104,7 @@ def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
             file=RemoteMetadata(
                 bucket="bucket",
                 key="example/file.txt",
-                status=UploadStatus.PENDING,
+                status="pending",
                 created_at=now,
                 updated_at=now,
             ),
@@ -114,5 +114,5 @@ def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
         session.refresh(record)
 
         assert isinstance(record.file, RemoteMetadata)
-        assert record.file.status is UploadStatus.PENDING
+        assert record.file.status == "pending"
         assert record.file.key == "example/file.txt"

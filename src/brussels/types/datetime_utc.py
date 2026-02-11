@@ -1,8 +1,10 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import DateTime
 from sqlalchemy.types import TypeDecorator
+
+from brussels.utils import utc
 
 
 class DateTimeUTC(TypeDecorator[datetime]):
@@ -20,13 +22,9 @@ class DateTimeUTC(TypeDecorator[datetime]):
                 f"datetime.combine(your_date, time())"
             )
             raise TypeError(msg)
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
+        return utc(value, raise_on_naive=False)
 
     def process_result_value(self, value: Any, _dialect: Any) -> datetime | None:  # type: ignore[override]  # noqa: ANN401
         if value is None:
             return None
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
+        return utc(value, raise_on_naive=False)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from inspect import isawaitable
 from typing import TYPE_CHECKING, cast
 from uuid import UUID
@@ -8,13 +7,16 @@ from uuid import UUID
 from pydantic import ValidationError  # ty: ignore[unresolved-import]
 from sqlalchemy.types import TypeDecorator
 
-from brussels.types.file.file import RemoteMetadata, RemoteMetadataDict, SupportsFileId, UploadStatus
+from brussels.types.file.metadata import RemoteMetadata, RemoteMetadataDict
 from brussels.types.json_type import Json
+from brussels.utils import now
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore  # ty: ignore[unresolved-import]
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
+
+    from brussels.mixins import PrimaryKeyMixin
 
 
 def _extract_value(result: object, *field_names: str) -> object | None:
@@ -99,7 +101,7 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
             raise ValueError(msg) from exc
 
     @staticmethod
-    def _model_id(model: SupportsFileId) -> str:
+    def _model_id(model: PrimaryKeyMixin) -> str:
         if (model_id := getattr(model, "id", None)) is None:
             msg = "RemoteStorage operations require model.id to be set."
             raise ValueError(msg)
@@ -149,7 +151,7 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
     async def upload(  # noqa: PLR0913
         self,
         *,
-        model: SupportsFileId,
+        model: PrimaryKeyMixin,
         field_name: str,
         data: object,
         bucket: str | None = None,
@@ -162,26 +164,26 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
     ) -> RemoteMetadata:
         metadata = self._get_metadata(model=model, field_name=field_name)
         if metadata is None:
-            now = datetime.now(UTC)
+            created_now = now()
             metadata = RemoteMetadata(
                 bucket=bucket,
                 key=key or self.build_key(model_id=self._model_id(model), field_name=field_name),
                 url=url,
-                status=UploadStatus.PENDING,
+                status="pending",
                 content_type=content_type,
-                created_at=now,
-                updated_at=now,
+                created_at=created_now,
+                updated_at=created_now,
             )
             setattr(model, field_name, metadata)
             await self._flush(session=session, flush=flush)
         else:
-            update_now = datetime.now(UTC)
+            update_now = now()
             metadata = metadata.model_copy(
                 update={
                     "bucket": bucket if bucket is not None else metadata.bucket,
                     "key": key or metadata.key,
                     "url": url or metadata.url,
-                    "status": UploadStatus.PENDING,
+                    "status": "pending",
                     "content_type": content_type or metadata.content_type,
                     "updated_at": update_now,
                     "uploaded_at": None,
@@ -199,8 +201,8 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
         except Exception as exc:
             failed_metadata = metadata.model_copy(
                 update={
-                    "status": UploadStatus.FAILED,
-                    "updated_at": datetime.now(UTC),
+                    "status": "failed",
+                    "updated_at": now(),
                     "error_message": f"upload failed ({type(exc).__name__})",
                 },
             )
@@ -208,7 +210,7 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
             await self._flush(session=session, flush=flush)
             raise
 
-        finished_at = datetime.now(UTC)
+        finished_at = now()
         size_bytes = _extract_optional_int(result, "size_bytes", "size", "bytes")
         if size_bytes is None:
             size_bytes = metadata.size_bytes
@@ -227,7 +229,7 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
 
         completed_metadata = metadata.model_copy(
             update={
-                "status": UploadStatus.COMPLETE,
+                "status": "complete",
                 "size_bytes": size_bytes,
                 "content_type": result_content_type,
                 "etag": etag,

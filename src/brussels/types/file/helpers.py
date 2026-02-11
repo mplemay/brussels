@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
-from brussels.types.file.file import RemoteMetadata, UploadStatus
 from brussels.types.file.remote_file import RemoteFile, RemoteMetadataField
+from brussels.utils import utc
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -13,15 +13,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from brussels.mixins import PrimaryKeyMixin
+    from brussels.types.file.metadata import RemoteMetadata
 
 T = TypeVar("T")
-
-
-def _ensure_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        msg = "Datetime values must be timezone-aware."
-        raise ValueError(msg)
-    return value.astimezone(UTC)
 
 
 def is_cleanup_candidate(
@@ -35,11 +29,11 @@ def is_cleanup_candidate(
     if stale_after < timedelta(0):
         msg = "stale_after must be non-negative."
         raise ValueError(msg)
-    if metadata.status not in {UploadStatus.PENDING, UploadStatus.FAILED}:
+    if metadata.status not in {"pending", "failed"}:
         return False
 
-    cutoff = _ensure_utc(now) - stale_after
-    return _ensure_utc(metadata.updated_at) <= cutoff
+    cutoff = utc(now) - stale_after
+    return utc(metadata.updated_at) <= cutoff
 
 
 def find_cleanup_candidates(

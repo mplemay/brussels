@@ -16,7 +16,6 @@ try:
         RemoteFile,
         RemoteMetadata,
         RemoteStorage,
-        UploadStatus,
         cleanup_remote_fields,
     )
 except ImportError:
@@ -178,12 +177,12 @@ async def test_upload_success_updates_metadata() -> None:
         flush=True,
     )
 
-    assert metadata.status is UploadStatus.COMPLETE
+    assert metadata.status == "complete"
     assert metadata.key == expected_key
     assert metadata.size_bytes == 5
     assert metadata.error_message is None
     assert model.file is not None
-    assert model.file.status is UploadStatus.COMPLETE
+    assert model.file.status == "complete"
     assert session.flush_calls == 2
     assert [name for name, *_rest in store_ops.calls] == ["put"]
     assert store_ops.calls[0][1][0] == expected_key
@@ -206,7 +205,7 @@ async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
         )
 
     assert model.file is not None
-    assert model.file.status is UploadStatus.FAILED
+    assert model.file.status == "failed"
     assert model.file.error_message == "upload failed (RuntimeError)"
     assert session.flush_calls == 2
 
@@ -219,7 +218,7 @@ async def test_reupload_bucket_behavior() -> None:
     model.file = RemoteMetadata(
         bucket="existing-bucket",
         key=f"{model.id}/file",
-        status=UploadStatus.PENDING,
+        status="pending",
         created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
         updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
     )
@@ -237,7 +236,7 @@ async def test_download_read_range_and_delete() -> None:
     _configure_remote_field(field_name="file", store_ops=store_ops)
     metadata = RemoteMetadata(
         key="folder/item.txt",
-        status=UploadStatus.COMPLETE,
+        status="complete",
         created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
         updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
     )
@@ -291,13 +290,13 @@ async def test_cleanup_remote_fields_deletes_multiple_fields() -> None:
     model = FileModel(
         file=RemoteMetadata(
             key="folder/file.txt",
-            status=UploadStatus.COMPLETE,
+            status="complete",
             created_at=created_at,
             updated_at=created_at,
         ),
         attachment=RemoteMetadata(
             key="folder/attachment.txt",
-            status=UploadStatus.COMPLETE,
+            status="complete",
             created_at=created_at,
             updated_at=created_at,
         ),
@@ -324,13 +323,13 @@ async def test_cleanup_remote_fields_is_fail_fast() -> None:
     model = FileModel(
         file=RemoteMetadata(
             key="folder/file.txt",
-            status=UploadStatus.COMPLETE,
+            status="complete",
             created_at=created_at,
             updated_at=created_at,
         ),
         attachment=RemoteMetadata(
             key="folder/attachment.txt",
-            status=UploadStatus.COMPLETE,
+            status="complete",
             created_at=created_at,
             updated_at=created_at,
         ),
@@ -356,7 +355,7 @@ async def test_cleanup_remote_fields_skips_empty_metadata() -> None:
         file=None,
         attachment=RemoteMetadata(
             key="folder/attachment.txt",
-            status=UploadStatus.COMPLETE,
+            status="complete",
             created_at=created_at,
             updated_at=created_at,
         ),
@@ -390,7 +389,7 @@ async def test_remote_file_metadata_property_tracks_field_updates() -> None:
 
     await file_handle.upload(data=b"hello")
     assert file_handle.metadata is not None
-    assert file_handle.metadata.status is UploadStatus.COMPLETE
+    assert file_handle.metadata.status == "complete"
 
     await file_handle.delete()
     assert file_handle.metadata is None

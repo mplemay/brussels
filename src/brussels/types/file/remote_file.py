@@ -1,30 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Self
 
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from brussels.mixins import PrimaryKeyMixin
-from brussels.types.file.file import RemoteMetadata, SupportsFileId
+from brussels.types.file.metadata import RemoteMetadata
 from brussels.types.file.storage import RemoteStorage
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
 
-ModelT = TypeVar("ModelT", bound=PrimaryKeyMixin)
 type RemoteMetadataField = InstrumentedAttribute[RemoteMetadata | None]
 
 
 @dataclass(slots=True, kw_only=True)
-class RemoteFile:
-    model: PrimaryKeyMixin
+class RemoteFile[M: PrimaryKeyMixin]:
+    model: M
     field_name: str
     remote_storage: RemoteStorage
 
     @classmethod
-    def from_metadata(cls, model: ModelT, field: RemoteMetadataField) -> Self:
+    def from_metadata(cls, model: M, field: RemoteMetadataField) -> Self:
         if not isinstance(model, PrimaryKeyMixin):
             msg = "RemoteStorage operations require models that inherit from brussels.mixins.PrimaryKeyMixin."
             raise TypeError(msg)
@@ -66,7 +65,7 @@ class RemoteFile:
         **put_kwargs: object,
     ) -> RemoteMetadata:
         return await self.remote_storage.upload(
-            model=cast("SupportsFileId", self.model),
+            model=self.model,
             field_name=self.field_name,
             data=data,
             bucket=bucket,

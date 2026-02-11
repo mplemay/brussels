@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator  # ty: ignore
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from brussels.types.file.storage import RemoteFieldHandle
+
 type RemoteFileDict = dict[str, object]
 
 
@@ -56,3 +58,9 @@ class RemoteFile(BaseModel):
     @classmethod
     def from_dict(cls, data: RemoteFileDict) -> Self:
         return cls.model_validate(data)
+
+    @classmethod
+    def from_field(cls, model: object, field: object) -> RemoteFieldHandle:
+        from brussels.types.file.storage import RemoteFieldHandle  # noqa: PLC0415
+
+        return RemoteFieldHandle.from_field(model, field)

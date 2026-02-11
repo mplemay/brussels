@@ -11,12 +11,14 @@ except ModuleNotFoundError as exc:
 else:
     from .file import RemoteFile, UploadStatus
     from .helpers import find_cleanup_candidates, is_cleanup_candidate
-    from .storage import RemoteStorage
+    from .storage import RemoteFieldHandle, RemoteStorage, cleanup_remote_fields
 
 __all__ = [
+    "RemoteFieldHandle",
     "RemoteFile",
     "RemoteStorage",
     "UploadStatus",
+    "cleanup_remote_fields",
     "find_cleanup_candidates",
     "is_cleanup_candidate",
 ]

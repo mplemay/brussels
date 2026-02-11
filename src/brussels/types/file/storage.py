@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from inspect import isawaitable
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Self, cast
 from uuid import UUID
 
 from pydantic import ValidationError  # ty: ignore[unresolved-import]
-from sqlalchemy import event
-from sqlalchemy.orm import Mapper
 from sqlalchemy.types import TypeDecorator
 
 from brussels.types.file.file import RemoteFile, RemoteFileDict, SupportsFileId, UploadStatus
@@ -137,6 +136,9 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         msg = f"Model field '{field_name}' must hold RemoteFile | dict | None, got {type_name}."
         raise TypeError(msg)
 
+    def get_metadata(self, *, model: object, field_name: str) -> RemoteFile | None:
+        return self._get_metadata(model=model, field_name=field_name)
+
     async def _put(self, *args: object, **kwargs: object) -> object:
         return await self.store.put(*args, **kwargs)
 
@@ -158,13 +160,11 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         bucket: str | None = None,
         key: str | None = None,
         url: str | None = None,
-        filename: str | None = None,
         content_type: str | None = None,
         session: Session | AsyncSession | None = None,
         flush: bool = False,
         **put_kwargs: object,
     ) -> RemoteFile:
-        del filename
         metadata = self._get_metadata(model=model, field_name=field_name)
         if metadata is None:
             now = datetime.now(UTC)
@@ -289,7 +289,16 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         await self._flush(session=session, flush=flush)
 
 
-def _resolve_remote_storage(model: object, *, field_name: str) -> RemoteStorage:
+def _resolve_remote_storage(model: object, *, field: object) -> tuple[str, RemoteStorage]:
+    field_name = getattr(field, "key", None)
+    if not isinstance(field_name, str):
+        msg = "RemoteStorage operations require a mapped SQLAlchemy field."
+        raise TypeError(msg)
+    field_owner = getattr(field, "class_", None)
+    if isinstance(field_owner, type) and not isinstance(model, field_owner):
+        msg = f"Field '{field_name}' is not mapped on model type '{type(model).__name__}'."
+        raise TypeError(msg)
+
     table = getattr(type(model), "__table__", None)
     if table is None:
         msg = "RemoteStorage operations require SQLAlchemy model instances with __table__ metadata."
@@ -301,86 +310,94 @@ def _resolve_remote_storage(model: object, *, field_name: str) -> RemoteStorage:
     if not isinstance(column_type, RemoteStorage):
         msg = f"Model column '{field_name}' must use brussels.types.file.RemoteStorage."
         raise TypeError(msg)
-    return column_type
+    return field_name, column_type
 
 
-async def _model_upload(  # noqa: PLR0913
-    self: object,
+@dataclass(slots=True, kw_only=True)
+class RemoteFieldHandle:
+    model: object
+    field_name: str
+    remote_storage: RemoteStorage
+
+    @classmethod
+    def from_field(cls, model: object, field: object) -> Self:
+        field_name, remote_storage = _resolve_remote_storage(model, field=field)
+        return cls(model=model, field_name=field_name, remote_storage=remote_storage)
+
+    def metadata(self) -> RemoteFile | None:
+        return self.remote_storage.get_metadata(model=self.model, field_name=self.field_name)
+
+    async def upload(  # noqa: PLR0913
+        self,
+        *,
+        data: object,
+        bucket: str | None = None,
+        key: str | None = None,
+        url: str | None = None,
+        content_type: str | None = None,
+        session: Session | AsyncSession | None = None,
+        flush: bool = False,
+        **put_kwargs: object,
+    ) -> RemoteFile:
+        return await self.remote_storage.upload(
+            model=cast("SupportsFileId", self.model),
+            field_name=self.field_name,
+            data=data,
+            bucket=bucket,
+            key=key,
+            url=url,
+            content_type=content_type,
+            session=session,
+            flush=flush,
+            **put_kwargs,
+        )
+
+    async def download(self, **kwargs: object) -> object:
+        return await self.remote_storage.download(model=self.model, field_name=self.field_name, **kwargs)
+
+    async def read_range(self, start: int, end: int, **kwargs: object) -> object:
+        return await self.remote_storage.read_range(
+            model=self.model,
+            field_name=self.field_name,
+            start=start,
+            end=end,
+            **kwargs,
+        )
+
+    async def delete(
+        self,
+        *,
+        session: Session | AsyncSession | None = None,
+        flush: bool = False,
+        delete_remote: bool = True,
+        **delete_kwargs: object,
+    ) -> None:
+        await self.remote_storage.delete_file(
+            model=self.model,
+            field_name=self.field_name,
+            session=session,
+            flush=flush,
+            delete_remote=delete_remote,
+            **delete_kwargs,
+        )
+
+
+async def cleanup_remote_fields(
     *,
-    data: object,
-    bucket: str | None = None,
-    key: str | None = None,
-    url: str | None = None,
-    filename: str | None = None,
-    content_type: str | None = None,
-    session: Session | AsyncSession | None = None,
-    flush: bool = False,
-    **put_kwargs: object,
-) -> RemoteFile:
-    remote_storage = _resolve_remote_storage(self, field_name="file")
-    return await remote_storage.upload(
-        model=cast("SupportsFileId", self),
-        field_name="file",
-        data=data,
-        bucket=bucket,
-        key=key,
-        url=url,
-        filename=filename,
-        content_type=content_type,
-        session=session,
-        flush=flush,
-        **put_kwargs,
-    )
-
-
-async def _model_download(self: object, **kwargs: object) -> object:
-    remote_storage = _resolve_remote_storage(self, field_name="file")
-    return await remote_storage.download(model=self, field_name="file", **kwargs)
-
-
-async def _model_read_range(self: object, start: int, end: int, **kwargs: object) -> object:
-    remote_storage = _resolve_remote_storage(self, field_name="file")
-    return await remote_storage.read_range(model=self, field_name="file", start=start, end=end, **kwargs)
-
-
-async def _model_delete(
-    self: object,
-    *,
+    model: object,
+    fields: list[object] | tuple[object, ...],
     session: Session | AsyncSession | None = None,
     flush: bool = False,
     delete_remote: bool = True,
     **delete_kwargs: object,
 ) -> None:
-    remote_storage = _resolve_remote_storage(self, field_name="file")
-    await remote_storage.delete_file(
-        model=self,
-        field_name="file",
-        session=session,
-        flush=flush,
-        delete_remote=delete_remote,
-        **delete_kwargs,
-    )
-
-
-def _attach_file_methods(_mapper: Mapper[object], cls: type[object]) -> None:
-    table = getattr(cls, "__table__", None)
-    if table is None or "file" not in table.c:
-        return
-    column_type = table.c["file"].type
-    if not isinstance(column_type, RemoteStorage):
-        return
-
-    if "upload" not in cls.__dict__:
-        cls.upload = _model_upload  # type: ignore[attr-defined]
-
-    if "download" not in cls.__dict__:
-        cls.download = _model_download  # type: ignore[attr-defined]
-
-    if "read_range" not in cls.__dict__:
-        cls.read_range = _model_read_range  # type: ignore[attr-defined]
-
-    if "delete" not in cls.__dict__:
-        cls.delete = _model_delete  # type: ignore[attr-defined]
-
-
-event.listen(Mapper, "mapper_configured", _attach_file_methods)
+    for field in fields:
+        remote_field = RemoteFieldHandle.from_field(model, field)
+        if remote_field.metadata() is None:
+            continue
+        await remote_field.delete(
+            session=session,
+            flush=flush,
+            delete_remote=delete_remote,
+            **delete_kwargs,
+        )

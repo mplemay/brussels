@@ -37,21 +37,21 @@ async def main() -> None:
         session.add(doc)
         session.flush()  # ensure doc.id exists before upload
 
-        uploaded = await doc.upload(  # type: ignore[attr-defined]
+        remote_file = RemoteFile.from_field(doc, Document.file)
+        uploaded = await remote_file.upload(
             data=b"hello world",
-            filename="hello.txt",
             content_type="text/plain",
         )
         if uploaded.key != f"{doc.id}/file":
             msg = "Unexpected key generated for uploaded file."
             raise RuntimeError(msg)
 
-        content = await doc.download()  # type: ignore[attr-defined]
+        content = await remote_file.download()
         if content != b"hello world":
             msg = "Unexpected content returned from remote file download."
             raise RuntimeError(msg)
 
-        await doc.delete()  # type: ignore[attr-defined]
+        await remote_file.delete()
         session.commit()
         if doc.file is not None:
             msg = "File metadata should be cleared after delete."

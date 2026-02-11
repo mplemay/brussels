@@ -34,8 +34,7 @@ def _extract_value(result: object, *field_names: str) -> object | None:
 
 
 def _extract_optional_str(result: object, *field_names: str) -> str | None:
-    value = _extract_value(result, *field_names)
-    if value is None:
+    if (value := _extract_value(result, *field_names)) is None:
         return None
     if not isinstance(value, str):
         type_name = type(value).__name__
@@ -45,8 +44,7 @@ def _extract_optional_str(result: object, *field_names: str) -> str | None:
 
 
 def _extract_optional_int(result: object, *field_names: str) -> int | None:
-    value = _extract_value(result, *field_names)
-    if value is None:
+    if (value := _extract_value(result, *field_names)) is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         type_name = type(value).__name__
@@ -103,8 +101,7 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
 
     @staticmethod
     def _model_id(model: SupportsFileId) -> str:
-        model_id = getattr(model, "id", None)
-        if model_id is None:
+        if (model_id := getattr(model, "id", None)) is None:
             msg = "RemoteStorage operations require model.id to be set."
             raise ValueError(msg)
         if not isinstance(model_id, str | int | UUID):
@@ -123,8 +120,7 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
 
     @staticmethod
     def _get_metadata(*, model: object, field_name: str) -> RemoteFile | None:
-        value = getattr(model, field_name)
-        if value is None:
+        if (value := getattr(model, field_name)) is None:
             return None
         if isinstance(value, RemoteFile):
             return value
@@ -248,8 +244,7 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         return completed_metadata
 
     async def download(self, *, model: object, field_name: str, **kwargs: object) -> object:
-        metadata = self._get_metadata(model=model, field_name=field_name)
-        if metadata is None:
+        if (metadata := self._get_metadata(model=model, field_name=field_name)) is None:
             msg = f"Model field '{field_name}' has no file metadata."
             raise ValueError(msg)
         return await self._get(metadata.key, **kwargs)
@@ -263,8 +258,7 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         end: int,
         **kwargs: object,
     ) -> object:
-        metadata = self._get_metadata(model=model, field_name=field_name)
-        if metadata is None:
+        if (metadata := self._get_metadata(model=model, field_name=field_name)) is None:
             msg = f"Model field '{field_name}' has no file metadata."
             raise ValueError(msg)
         return await self._get_range(metadata.key, start, end, **kwargs)
@@ -279,8 +273,7 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         delete_remote: bool = True,
         **delete_kwargs: object,
     ) -> None:
-        metadata = self._get_metadata(model=model, field_name=field_name)
-        if metadata is None:
+        if (metadata := self._get_metadata(model=model, field_name=field_name)) is None:
             msg = f"Model field '{field_name}' has no file metadata."
             raise ValueError(msg)
         if delete_remote:
@@ -290,12 +283,10 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
 
 
 def _resolve_remote_storage(model: object, *, field: object) -> tuple[str, RemoteStorage]:
-    field_name = getattr(field, "key", None)
-    if not isinstance(field_name, str):
+    if not isinstance(field_name := getattr(field, "key", None), str):
         msg = "RemoteStorage operations require a mapped SQLAlchemy field."
         raise TypeError(msg)
-    field_owner = getattr(field, "class_", None)
-    if isinstance(field_owner, type) and not isinstance(model, field_owner):
+    if isinstance(field_owner := getattr(field, "class_", None), type) and not isinstance(model, field_owner):
         msg = f"Field '{field_name}' is not mapped on model type '{type(model).__name__}'."
         raise TypeError(msg)
 

@@ -46,6 +46,20 @@ def test_remote_file_compiles_to_json_for_sqlite() -> None:
     assert "JSON" in compiled
 
 
+def test_build_key_is_deterministic_model_id_and_field() -> None:
+    remote_file = RemoteFile(store=object())
+
+    assert remote_file.build_key(model_id="abc", field_name="file") == "abc/file"
+    assert remote_file.build_key(model_id=42, field_name="file") == "42/file"
+
+
+def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
+    with pytest.raises(TypeError):
+        RemoteFile(store=object(), key_prefix="uploads")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        RemoteFile(store=object(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
+
+
 def test_process_bind_param_serializes_metadata() -> None:
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     metadata = RemoteFileMetadata(

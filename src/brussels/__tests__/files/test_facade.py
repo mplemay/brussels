@@ -208,9 +208,59 @@ async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
 
     assert model.file is not None
     assert model.file.status is UploadStatus.FAILED
-    assert model.file.error_message == "upload failed"
+    assert model.file.error_message == "upload failed (RuntimeError)"
     assert session.flush_calls == 2
     assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_reupload_preserves_existing_bucket_when_bucket_is_omitted() -> None:
+    remote_file = RemoteFile(
+        store=object(),
+        store_ops=FakeStoreOps(),
+        key_factory=lambda model_id, _filename: f"{model_id}/generated.txt",
+        now=_clock([datetime(2025, 1, 1, 12, 1, tzinfo=UTC)]),
+    )
+    facade = RemoteFileFacade(remote_file=remote_file)
+    model = FileModel(
+        id="user-123",
+        file=RemoteFileMetadata(
+            bucket="existing-bucket",
+            key="user-123/original.txt",
+            status=UploadStatus.PENDING,
+            created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+            updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+        ),
+    )
+
+    updated = await facade.upload(model=model, field_name="file", data=b"hello")
+
+    assert updated.bucket == "existing-bucket"
+
+
+@pytest.mark.asyncio
+async def test_reupload_overrides_existing_bucket_when_bucket_is_provided() -> None:
+    remote_file = RemoteFile(
+        store=object(),
+        store_ops=FakeStoreOps(),
+        key_factory=lambda model_id, _filename: f"{model_id}/generated.txt",
+        now=_clock([datetime(2025, 1, 1, 12, 1, tzinfo=UTC)]),
+    )
+    facade = RemoteFileFacade(remote_file=remote_file)
+    model = FileModel(
+        id="user-123",
+        file=RemoteFileMetadata(
+            bucket="existing-bucket",
+            key="user-123/original.txt",
+            status=UploadStatus.PENDING,
+            created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+            updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+        ),
+    )
+
+    updated = await facade.upload(model=model, field_name="file", data=b"hello", bucket="new-bucket")
+
+    assert updated.bucket == "new-bucket"
 
 
 @pytest.mark.asyncio

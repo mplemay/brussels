@@ -13,7 +13,8 @@ T = TypeVar("T")
 
 def _ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
+        msg = "Datetime values must be timezone-aware."
+        raise ValueError(msg)
     return value.astimezone(UTC)
 
 

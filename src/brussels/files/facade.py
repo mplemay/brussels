@@ -215,7 +215,7 @@ class RemoteFileFacade:
             update_now = remote_file.now()
             metadata = metadata.model_copy(
                 update={
-                    "bucket": bucket,
+                    "bucket": bucket if bucket is not None else metadata.bucket,
                     "key": key or metadata.key,
                     "url": url or metadata.url,
                     "status": UploadStatus.PENDING,
@@ -238,7 +238,7 @@ class RemoteFileFacade:
                 update={
                     "status": UploadStatus.FAILED,
                     "updated_at": remote_file.now(),
-                    "error_message": str(exc),
+                    "error_message": f"upload failed ({type(exc).__name__})",
                 },
             )
             setattr(model, field_name, failed_metadata)

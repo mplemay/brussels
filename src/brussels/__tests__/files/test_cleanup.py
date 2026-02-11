@@ -53,6 +53,17 @@ def test_is_cleanup_candidate_false_for_complete_or_recent_pending() -> None:
     assert is_cleanup_candidate(recent_pending, now=now, stale_after=timedelta(minutes=30)) is False
 
 
+def test_is_cleanup_candidate_rejects_naive_now_datetime() -> None:
+    metadata = _metadata(
+        status=UploadStatus.PENDING,
+        updated_at=datetime(2025, 1, 1, 11, 0, tzinfo=UTC),
+    )
+    naive_now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC).replace(tzinfo=None)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        is_cleanup_candidate(metadata, now=naive_now, stale_after=timedelta(minutes=30))
+
+
 def test_find_cleanup_candidates_filters_stale_incomplete_rows() -> None:
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     rows = [

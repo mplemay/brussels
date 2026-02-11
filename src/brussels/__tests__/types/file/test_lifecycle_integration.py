@@ -368,6 +368,89 @@ async def test_put_async_with_async_session_shim_rollback_discards_queue(engine:
     assert store_ops.calls == []
 
 
+@pytest.mark.asyncio
+async def test_delete_async_with_async_session_shim_defers_remote_delete_until_commit(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+        async_session = AsyncSessionShim(session)
+
+        await _file_handle(model).delete_async(
+            session=cast("AsyncSession", async_session),
+            flush=True,
+        )
+
+        assert model.file is None
+        assert store_ops.calls == []
+        session.commit()
+
+    assert [name for name, *_ in store_ops.calls] == ["delete"]
+    assert store_ops.calls[0][1][0] == "folder/item.txt"
+
+    with Session(engine) as read_session:
+        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
+        assert metadata is None
+
+
+@pytest.mark.asyncio
+async def test_delete_async_with_async_session_shim_rollback_discards_queue(engine: Engine) -> None:
+    store_ops = FakeStoreOps()
+    _configure_remote_field(store_ops=store_ops)
+    created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+    with Session(engine) as session:
+        model = FileModel(
+            file=RemoteMetadata(
+                key="folder/item.txt",
+                status="complete",
+                created_at=created_at,
+                updated_at=created_at,
+            ),
+        )
+        session.add(model)
+        session.commit()
+        model_id = model.id
+
+    with Session(engine) as session:
+        model = session.get(FileModel, model_id)
+        assert model is not None
+        async_session = AsyncSessionShim(session)
+
+        await _file_handle(model).delete_async(
+            session=cast("AsyncSession", async_session),
+            flush=True,
+        )
+
+        assert model.file is None
+        assert store_ops.calls == []
+        session.rollback()
+
+    assert store_ops.calls == []
+
+    with Session(engine) as read_session:
+        metadata = read_session.scalar(select(FileModel.file).where(FileModel.id == model_id))
+        assert metadata is not None
+        assert metadata.key == "folder/item.txt"
+        assert metadata.status == "complete"
+
+
 def test_nested_transaction_rollback_discards_only_nested_operations(engine: Engine) -> None:
     store_ops = FakeStoreOps()
     _configure_remote_field(store_ops=store_ops)

@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
 
+    from brussels.types.file.remote_file import SupportsRemoteFileModel
+
 
 class FileModel(Base):
     __tablename__ = "file_model"
@@ -32,6 +34,13 @@ class FileModel(Base):
     id: Mapped[str | int | None] = mapped_column(primary_key=True)
     file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
     attachment: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
+
+
+class OtherFileModel(Base):
+    __tablename__ = "other_file_model"
+
+    id: Mapped[str | int | None] = mapped_column(primary_key=True)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
 
 
 class SyncSessionSpy:
@@ -93,11 +102,11 @@ def _configure_remote_field(*, field_name: str, store_ops: FakeStoreOps) -> None
 
 
 def _file_handle(model: FileModel) -> RemoteFile:
-    return RemoteFile.from_field(model, FileModel.file)
+    return RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.file)
 
 
 def _attachment_handle(model: FileModel) -> RemoteFile:
-    return RemoteFile.from_field(model, FileModel.attachment)
+    return RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.attachment)
 
 
 def test_remote_file_compiles_to_jsonb_for_postgres() -> None:
@@ -124,19 +133,26 @@ def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
         RemoteStorage(store=object(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
 
 
-def test_from_field_resolves_remote_storage_for_mapped_field() -> None:
+def test_from_metadata_resolves_remote_storage_for_mapped_field() -> None:
     model = FileModel(id="abc")
 
-    handle = RemoteFile.from_field(model, FileModel.file)
+    handle = RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.file)
 
     assert handle.field_name == "file"
 
 
-def test_from_field_rejects_non_remote_storage_field() -> None:
+def test_from_metadata_rejects_non_remote_storage_field() -> None:
     model = FileModel(id="abc")
 
     with pytest.raises(TypeError, match=r"must use brussels\.types\.file\.RemoteStorage"):
-        RemoteFile.from_field(model, FileModel.id)  # type: ignore[arg-type]
+        RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.id)  # type: ignore[arg-type]
+
+
+def test_from_metadata_rejects_field_from_different_model() -> None:
+    model = FileModel(id="abc")
+
+    with pytest.raises(TypeError, match=r"is not mapped on model type"):
+        RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), OtherFileModel.file)
 
 
 def test_model_does_not_receive_dynamic_file_methods() -> None:
@@ -356,10 +372,10 @@ async def test_cleanup_remote_fields_skips_empty_metadata() -> None:
     assert [name for name, *_rest in attachment_store.calls] == ["delete"]
 
 
-def test_remote_file_from_field_returns_handle() -> None:
+def test_remote_file_from_metadata_returns_handle() -> None:
     model = FileModel(id="abc")
 
-    handle = RemoteFile.from_field(model, FileModel.file)
+    handle = RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.file)
 
     assert isinstance(handle, RemoteFile)
     assert handle.field_name == "file"

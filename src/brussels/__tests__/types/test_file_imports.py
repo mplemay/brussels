@@ -19,6 +19,7 @@ def test_file_module_import_error_guides_files_extra(monkeypatch: pytest.MonkeyP
     for module_name in [
         "brussels.types.file",
         "brussels.types.file.file",
+        "brussels.types.file.remote_file",
         "brussels.types.file.storage",
         "brussels.types.file.helpers",
     ]:
@@ -26,5 +27,5 @@ def test_file_module_import_error_guides_files_extra(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match=r"pip install brussels\[files\]"):
+    with pytest.raises(ImportError, match=r"pip install brussels\[file\]"):
         importlib.import_module("brussels.types.file")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -12,8 +13,11 @@ try:
 
     from brussels.types.file import RemoteFile, RemoteMetadata, RemoteStorage
 except ImportError as exc:
-    msg = "This example requires optional dependencies. Install with: pip install 'brussels[files]'"
+    msg = "This example requires optional dependencies. Install with: pip install 'brussels[file]'"
     raise SystemExit(msg) from exc
+
+if TYPE_CHECKING:
+    from brussels.types.file.remote_file import SupportsRemoteFileModel
 
 
 class Document(Base):
@@ -37,7 +41,7 @@ async def main() -> None:
         session.add(doc)
         session.flush()  # ensure doc.id exists before upload
 
-        remote_file = RemoteFile.from_field(doc, Document.file)
+        remote_file = RemoteFile.from_metadata(cast("SupportsRemoteFileModel", doc), Document.file)
         uploaded = await remote_file.upload(
             data=b"hello world",
             content_type="text/plain",

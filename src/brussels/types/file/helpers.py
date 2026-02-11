@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from brussels.types.file.file import RemoteMetadata, UploadStatus
-from brussels.types.file.storage import RemoteFile, RemoteMetadataField
+from brussels.types.file.remote_file import RemoteFile, RemoteMetadataField, SupportsRemoteFileModel
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,7 +60,7 @@ async def cleanup_remote_fields(
     **delete_kwargs: object,
 ) -> None:
     for field in fields:
-        remote_file = RemoteFile.from_field(model, field)
+        remote_file = RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), field)
         if remote_file.metadata is None:
             continue
         await remote_file.delete(

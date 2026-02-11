@@ -1,6 +1,6 @@
 _FILE_IMPORT_ERROR = (
     "brussels file support requires optional dependencies 'pydantic' and 'obstore'. "
-    "Install with `pip install brussels[files]`."
+    "Install with `pip install brussels[file]`."
 )
 
 try:
@@ -11,7 +11,8 @@ except ModuleNotFoundError as exc:
 else:
     from .file import RemoteMetadata, UploadStatus
     from .helpers import cleanup_remote_fields, find_cleanup_candidates, is_cleanup_candidate
-    from .storage import RemoteFile, RemoteStorage
+    from .remote_file import RemoteFile
+    from .storage import RemoteStorage
 
 __all__ = [
     "RemoteFile",

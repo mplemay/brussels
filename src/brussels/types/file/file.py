@@ -5,9 +5,16 @@ from inspect import isawaitable
 from typing import TYPE_CHECKING, Self, cast
 from uuid import UUID
 
+from sqlalchemy.orm import Session, object_session
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from brussels.mixins import PrimaryKeyMixin
+from brussels.types.file.lifecycle import (
+    enqueue_delete_operation,
+    enqueue_put_operation,
+    snapshot_put_payload,
+    snapshot_put_payload_async,
+)
 from brussels.types.file.metadata import RemoteMetadata
 from brussels.types.file.storage import RemoteStorage
 from brussels.utils import now
@@ -20,7 +27,6 @@ if TYPE_CHECKING:
     from obstore import Attributes, GetOptions, PutMode, PutResult
     from obstore._obstore import Bytes, GetResult
     from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy.orm import Session
 
     type PutInput = IO[bytes] | Path | bytes | Buffer | Iterator[Buffer] | Iterable[Buffer]
     type PutAsyncInput = (
@@ -135,6 +141,22 @@ class RemoteFile[M: PrimaryKeyMixin]:
         if isawaitable(maybe_awaitable):
             await maybe_awaitable
 
+    @staticmethod
+    def _resolve_sync_session(
+        *,
+        session: Session | AsyncSession | None,
+        model: PrimaryKeyMixin,
+    ) -> Session | None:
+        if isinstance(session, Session):
+            return session
+
+        if session is not None and isinstance(sync_session := getattr(session, "sync_session", None), Session):
+            return sync_session
+
+        if isinstance(loaded_session := object_session(model), Session):
+            return loaded_session
+        return None
+
     def _prepare_pending_metadata(
         self,
         *,
@@ -236,6 +258,25 @@ class RemoteFile[M: PrimaryKeyMixin]:
             content_type=content_type,
         )
         self._flush_sync(session=session, flush=flush)
+        resolved_session = self._resolve_sync_session(session=session, model=self.model)
+        if resolved_session is not None:
+            payload = snapshot_put_payload(file)
+            deferred_result = enqueue_put_operation(
+                session=resolved_session,
+                model=self.model,
+                field_name=self.field_name,
+                remote_storage=self.remote_storage,
+                metadata=metadata,
+                payload=payload,
+                attributes=attributes,
+                tags=tags,
+                mode=mode,
+                use_multipart=use_multipart,
+                chunk_size=chunk_size,
+                max_concurrency=max_concurrency,
+                content_type=content_type,
+            )
+            return cast("PutResult", deferred_result)
 
         try:
             result = self.remote_storage.store.put(
@@ -281,6 +322,25 @@ class RemoteFile[M: PrimaryKeyMixin]:
             content_type=content_type,
         )
         await self._flush_async(session=session, flush=flush)
+        resolved_session = self._resolve_sync_session(session=session, model=self.model)
+        if resolved_session is not None:
+            payload = await snapshot_put_payload_async(file)
+            deferred_result = enqueue_put_operation(
+                session=resolved_session,
+                model=self.model,
+                field_name=self.field_name,
+                remote_storage=self.remote_storage,
+                metadata=metadata,
+                payload=payload,
+                attributes=attributes,
+                tags=tags,
+                mode=mode,
+                use_multipart=use_multipart,
+                chunk_size=chunk_size,
+                max_concurrency=max_concurrency,
+                content_type=content_type,
+            )
+            return cast("PutResult", deferred_result)
 
         try:
             result = await self.remote_storage.store.put_async(
@@ -366,8 +426,18 @@ class RemoteFile[M: PrimaryKeyMixin]:
         delete_remote: bool = True,
     ) -> None:
         metadata = self._required_metadata()
+        resolved_session = self._resolve_sync_session(session=session, model=self.model)
         if delete_remote:
-            self.remote_storage.store.delete(metadata.key)
+            if resolved_session is not None:
+                enqueue_delete_operation(
+                    session=resolved_session,
+                    model=self.model,
+                    field_name=self.field_name,
+                    remote_storage=self.remote_storage,
+                    metadata=metadata,
+                )
+            else:
+                self.remote_storage.store.delete(metadata.key)
         setattr(self.model, self.field_name, None)
         self._flush_sync(session=session, flush=flush)
 
@@ -379,7 +449,17 @@ class RemoteFile[M: PrimaryKeyMixin]:
         delete_remote: bool = True,
     ) -> None:
         metadata = self._required_metadata()
+        resolved_session = self._resolve_sync_session(session=session, model=self.model)
         if delete_remote:
-            await self.remote_storage.store.delete_async(metadata.key)
+            if resolved_session is not None:
+                enqueue_delete_operation(
+                    session=resolved_session,
+                    model=self.model,
+                    field_name=self.field_name,
+                    remote_storage=self.remote_storage,
+                    metadata=metadata,
+                )
+            else:
+                await self.remote_storage.store.delete_async(metadata.key)
         setattr(self.model, self.field_name, None)
         await self._flush_async(session=session, flush=flush)

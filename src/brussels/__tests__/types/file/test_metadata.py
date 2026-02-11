@@ -62,9 +62,7 @@ def test_process_bind_param_rejects_invalid_value_type() -> None:
 def test_process_result_value_returns_typed_metadata() -> None:
     raw = {
         "schema": 1,
-        "bucket": "bucket",
         "key": "example/file.txt",
-        "url": None,
         "status": "complete",
         "size_bytes": 8,
         "content_type": "text/plain",
@@ -73,8 +71,6 @@ def test_process_result_value_returns_typed_metadata() -> None:
         "version": "v1",
         "created_at": "2025-01-01T12:00:00+00:00",
         "updated_at": "2025-01-01T12:01:00+00:00",
-        "uploaded_at": "2025-01-01T12:01:00+00:00",
-        "error_message": None,
     }
 
     metadata = RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
@@ -104,7 +100,6 @@ def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
     with Session(engine) as session:
         record = FileRecord(
             file=RemoteMetadata(
-                bucket="bucket",
                 key="example/file.txt",
                 status="pending",
                 created_at=now,

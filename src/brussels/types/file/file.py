@@ -138,17 +138,13 @@ class RemoteFile[M: PrimaryKeyMixin]:
     def _prepare_pending_metadata(
         self,
         *,
-        bucket: str | None,
         key: str | None,
-        url: str | None,
         content_type: str | None,
     ) -> RemoteMetadata:
         if (metadata := self.metadata) is None:
             created_now = now()
             metadata = RemoteMetadata(
-                bucket=bucket,
                 key=key or self.remote_storage.build_key(model_id=self._model_id(), field_name=self.field_name),
-                url=url,
                 status="pending",
                 content_type=content_type,
                 created_at=created_now,
@@ -159,25 +155,20 @@ class RemoteFile[M: PrimaryKeyMixin]:
 
         updated_metadata = metadata.model_copy(
             update={
-                "bucket": bucket if bucket is not None else metadata.bucket,
                 "key": key or metadata.key,
-                "url": url or metadata.url,
                 "status": "pending",
                 "content_type": content_type or metadata.content_type,
                 "updated_at": now(),
-                "uploaded_at": None,
-                "error_message": None,
             },
         )
         setattr(self.model, self.field_name, updated_metadata)
         return updated_metadata
 
-    def _apply_failed_metadata(self, *, metadata: RemoteMetadata, exc: Exception) -> None:
+    def _apply_failed_metadata(self, *, metadata: RemoteMetadata) -> None:
         failed_metadata = metadata.model_copy(
             update={
                 "status": "failed",
                 "updated_at": now(),
-                "error_message": f"upload failed ({type(exc).__name__})",
             },
         )
         setattr(self.model, self.field_name, failed_metadata)
@@ -215,8 +206,6 @@ class RemoteFile[M: PrimaryKeyMixin]:
                 "checksum": checksum,
                 "version": version,
                 "updated_at": finished_at,
-                "uploaded_at": finished_at,
-                "error_message": None,
             },
         )
         setattr(self.model, self.field_name, completed_metadata)
@@ -237,17 +226,13 @@ class RemoteFile[M: PrimaryKeyMixin]:
         use_multipart: bool | None = None,
         chunk_size: int = 5 * 1024 * 1024,
         max_concurrency: int = 12,
-        bucket: str | None = None,
         key: str | None = None,
-        url: str | None = None,
         content_type: str | None = None,
         session: Session | None = None,
         flush: bool = False,
     ) -> PutResult:
         metadata = self._prepare_pending_metadata(
-            bucket=bucket,
             key=key,
-            url=url,
             content_type=content_type,
         )
         self._flush_sync(session=session, flush=flush)
@@ -263,8 +248,8 @@ class RemoteFile[M: PrimaryKeyMixin]:
                 chunk_size=chunk_size,
                 max_concurrency=max_concurrency,
             )
-        except Exception as exc:
-            self._apply_failed_metadata(metadata=metadata, exc=exc)
+        except Exception:
+            self._apply_failed_metadata(metadata=metadata)
             self._flush_sync(session=session, flush=flush)
             raise
 
@@ -286,17 +271,13 @@ class RemoteFile[M: PrimaryKeyMixin]:
         use_multipart: bool | None = None,
         chunk_size: int = 5 * 1024 * 1024,
         max_concurrency: int = 12,
-        bucket: str | None = None,
         key: str | None = None,
-        url: str | None = None,
         content_type: str | None = None,
         session: Session | AsyncSession | None = None,
         flush: bool = False,
     ) -> PutResult:
         metadata = self._prepare_pending_metadata(
-            bucket=bucket,
             key=key,
-            url=url,
             content_type=content_type,
         )
         await self._flush_async(session=session, flush=flush)
@@ -312,8 +293,8 @@ class RemoteFile[M: PrimaryKeyMixin]:
                 chunk_size=chunk_size,
                 max_concurrency=max_concurrency,
             )
-        except Exception as exc:
-            self._apply_failed_metadata(metadata=metadata, exc=exc)
+        except Exception:
+            self._apply_failed_metadata(metadata=metadata)
             await self._flush_async(session=session, flush=flush)
             raise
 

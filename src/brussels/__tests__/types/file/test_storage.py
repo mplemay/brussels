@@ -260,7 +260,6 @@ def test_put_sync_updates_metadata_and_returns_put_result() -> None:
     assert model.file.status == "complete"
     assert model.file.key == expected_key
     assert model.file.size_bytes == 5
-    assert model.file.error_message is None
     assert session.flush_calls == 2
     assert [name for name, *_rest in store_ops.calls] == ["put"]
     assert store_ops.calls[0][1][0] == expected_key
@@ -287,7 +286,6 @@ async def test_put_async_success_updates_metadata_and_returns_put_result() -> No
     assert model.file.status == "complete"
     assert model.file.key == expected_key
     assert model.file.size_bytes == 5
-    assert model.file.error_message is None
     assert session.flush_calls == 2
     assert [name for name, *_rest in store_ops.calls] == ["put_async"]
     assert store_ops.calls[0][1][0] == expected_key
@@ -311,30 +309,7 @@ async def test_put_async_failure_marks_metadata_failed_and_re_raises() -> None:
 
     assert model.file is not None
     assert model.file.status == "failed"
-    assert model.file.error_message == "upload failed (RuntimeError)"
     assert session.flush_calls == 2
-
-
-@pytest.mark.asyncio
-async def test_reput_bucket_behavior() -> None:
-    store_ops = FakeStoreOps()
-    _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel()
-    model.file = RemoteMetadata(
-        bucket="existing-bucket",
-        key=f"{model.id}/file",
-        status="pending",
-        created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-        updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-    )
-
-    await _file_handle(model).put_async(b"hello")
-    assert model.file is not None
-    assert model.file.bucket == "existing-bucket"
-
-    await _file_handle(model).put_async(b"hello", bucket="new-bucket")
-    assert model.file is not None
-    assert model.file.bucket == "new-bucket"
 
 
 def test_get_get_range_and_delete_sync() -> None:

@@ -18,9 +18,7 @@ class RemoteMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     schema_version: Literal[1] = Field(default=1, alias="schema")
-    bucket: str | None = None
     key: str
-    url: str | None = None
     status: Literal["pending", "complete", "failed", "deleted"] = "pending"
     size_bytes: int | None = None
     content_type: str | None = None
@@ -29,10 +27,8 @@ class RemoteMetadata(BaseModel):
     version: str | None = None
     created_at: datetime = Field(default_factory=now)
     updated_at: datetime = Field(default_factory=now)
-    uploaded_at: datetime | None = None
-    error_message: str | None = None
 
-    @field_validator("created_at", "updated_at", "uploaded_at", mode="after")
+    @field_validator("created_at", "updated_at", mode="after")
     @classmethod
     def _normalize_to_utc(cls, value: datetime | None) -> datetime | None:
         if value is None:

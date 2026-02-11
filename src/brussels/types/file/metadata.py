@@ -19,7 +19,7 @@ class RemoteMetadata(BaseModel):
 
     schema_version: Literal[1] = Field(default=1, alias="schema")
     key: str
-    status: Literal["pending", "complete", "failed", "deleted"] = "pending"
+    status: Literal["pending", "complete", "failed"] = "pending"
     size_bytes: int | None = None
     content_type: str | None = None
     etag: str | None = None

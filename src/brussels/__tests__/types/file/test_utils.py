@@ -21,7 +21,7 @@ class Row:
     file: RemoteMetadata | None
 
 
-type StatusLiteral = Literal["pending", "complete", "failed", "deleted"]
+type StatusLiteral = Literal["pending", "complete", "failed"]
 
 
 def _metadata(*, status: StatusLiteral, updated_at: datetime) -> RemoteMetadata:

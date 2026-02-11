@@ -93,6 +93,19 @@ def test_process_result_value_rejects_legacy_store_name_field() -> None:
         RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
 
 
+def test_process_result_value_rejects_deleted_status() -> None:
+    raw = {
+        "schema": 1,
+        "key": "example/file.txt",
+        "status": "deleted",
+        "created_at": "2025-01-01T12:00:00+00:00",
+        "updated_at": "2025-01-01T12:01:00+00:00",
+    }
+
+    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata from database is invalid"):
+        RemoteStorage(store=MemoryStore()).process_result_value(raw, None)
+
+
 def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)

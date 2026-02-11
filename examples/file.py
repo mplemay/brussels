@@ -8,10 +8,10 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from brussels.base import Base
 
 try:
-    from obstore.store import MemoryStore
+    from obstore.store import MemoryStore  # ty: ignore[unresolved-import]
 
-    from brussels.types import RemoteFile, RemoteStorage
-except ModuleNotFoundError as exc:
+    from brussels.types.file import RemoteFile, RemoteStorage
+except ImportError as exc:
     msg = "This example requires optional dependencies. Install with: pip install 'brussels[files]'"
     raise SystemExit(msg) from exc
 

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from importlib import import_module
 from inspect import isawaitable
-from typing import TYPE_CHECKING, Protocol, Self, cast
+from typing import TYPE_CHECKING, Protocol, Self, TypeVar, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator  # ty: ignore[unresolved-import]
@@ -16,6 +15,7 @@ from sqlalchemy.types import TypeDecorator
 from brussels.types.json_type import Json
 
 if TYPE_CHECKING:
+    from obstore.store import ObjectStore  # ty: ignore[unresolved-import]
     from sqlalchemy.engine.interfaces import Dialect
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
@@ -29,13 +29,6 @@ class SupportsFileId(Protocol):
     id: str | int | UUID
 
 
-class _StoreOps(Protocol):
-    async def put(self, store: object, *args: object, **kwargs: object) -> object: ...
-    async def get(self, store: object, *args: object, **kwargs: object) -> object: ...
-    async def get_range(self, store: object, *args: object, **kwargs: object) -> object: ...
-    async def delete(self, store: object, *args: object, **kwargs: object) -> object: ...
-
-
 class UploadStatus(StrEnum):
     PENDING = "pending"
     COMPLETE = "complete"
@@ -45,20 +38,6 @@ class UploadStatus(StrEnum):
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _load_obstore_store() -> _StoreOps | None:
-    try:
-        module = import_module("obstore")
-    except ModuleNotFoundError:
-        return None
-    store = getattr(module, "store", None)
-    if store is None:
-        return None
-    return cast("_StoreOps", store)
-
-
-_obstore_store = _load_obstore_store()
 
 
 def _extract_value(result: object, *field_names: str) -> object | None:
@@ -140,14 +119,12 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
     def __init__(
         self,
         *,
-        store: object,
+        store: ObjectStore,
         now: RemoteFileNowFactory | None = None,
-        store_ops: object | None = None,
     ) -> None:
         super().__init__()
         self.store = store
         self.now = now or _utc_now
-        self.store_ops = store_ops
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[object]:
         return dialect.type_descriptor(Json)
@@ -186,17 +163,6 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
             msg = "RemoteStorage RemoteFile metadata from database is invalid."
             raise ValueError(msg) from exc
 
-    def _resolve_store_ops(self) -> _StoreOps:
-        if self.store_ops is not None:
-            return cast("_StoreOps", self.store_ops)
-        if _obstore_store is not None:
-            return _obstore_store
-        msg = (
-            "RemoteStorage operations require the optional dependency 'obstore'. "
-            "Install with `pip install brussels[files]`."
-        )
-        raise ModuleNotFoundError(msg)
-
     @staticmethod
     def _model_id(model: SupportsFileId) -> str:
         model_id = getattr(model, "id", None)
@@ -233,16 +199,16 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         raise TypeError(msg)
 
     async def _put(self, *args: object, **kwargs: object) -> object:
-        return await self._resolve_store_ops().put(self.store, *args, **kwargs)
+        return await self.store.put(*args, **kwargs)
 
     async def _get(self, *args: object, **kwargs: object) -> object:
-        return await self._resolve_store_ops().get(self.store, *args, **kwargs)
+        return await self.store.get(*args, **kwargs)
 
     async def _get_range(self, *args: object, **kwargs: object) -> object:
-        return await self._resolve_store_ops().get_range(self.store, *args, **kwargs)
+        return await self.store.get_range(*args, **kwargs)
 
     async def _delete(self, *args: object, **kwargs: object) -> object:
-        return await self._resolve_store_ops().delete(self.store, *args, **kwargs)
+        return await self.store.delete(*args, **kwargs)
 
     async def upload(  # noqa: PLR0913
         self,
@@ -394,7 +360,7 @@ def _resolve_remote_storage(model: object, *, field_name: str) -> RemoteStorage:
         raise ValueError(msg)
     column_type = table.c[field_name].type
     if not isinstance(column_type, RemoteStorage):
-        msg = f"Model column '{field_name}' must use brussels.types.RemoteStorage."
+        msg = f"Model column '{field_name}' must use brussels.types.file.RemoteStorage."
         raise TypeError(msg)
     return column_type
 
@@ -479,3 +445,40 @@ def _attach_file_methods(_mapper: Mapper[object], cls: type[object]) -> None:
 
 
 event.listen(Mapper, "mapper_configured", _attach_file_methods)
+
+T = TypeVar("T")
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        msg = "Datetime values must be timezone-aware."
+        raise ValueError(msg)
+    return value.astimezone(UTC)
+
+
+def is_cleanup_candidate(
+    metadata: RemoteFile | None,
+    *,
+    now: datetime,
+    stale_after: timedelta,
+) -> bool:
+    if metadata is None:
+        return False
+    if stale_after < timedelta(0):
+        msg = "stale_after must be non-negative."
+        raise ValueError(msg)
+    if metadata.status not in {UploadStatus.PENDING, UploadStatus.FAILED}:
+        return False
+
+    cutoff = _ensure_utc(now) - stale_after
+    return _ensure_utc(metadata.updated_at) <= cutoff
+
+
+def find_cleanup_candidates(
+    items: list[T],
+    *,
+    extractor: Callable[[T], RemoteFile | None],
+    now: datetime,
+    stale_after: timedelta,
+) -> list[T]:
+    return [item for item in items if is_cleanup_candidate(extractor(item), now=now, stale_after=stale_after)]

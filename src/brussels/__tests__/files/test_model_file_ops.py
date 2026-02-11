@@ -9,8 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from brussels.base import Base
 
 try:
-    from brussels.types import RemoteFile, RemoteStorage, UploadStatus
-except ModuleNotFoundError:
+    from brussels.types.file import RemoteFile, RemoteStorage, UploadStatus
+except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
 
@@ -39,7 +39,7 @@ class AsyncSessionSpy:
 
 class FakeStoreOps:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, object, tuple[object, ...], dict[str, object]]] = []
+        self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
         self.put_error: Exception | None = None
         self.put_response: object = {
             "size_bytes": 5,
@@ -49,25 +49,25 @@ class FakeStoreOps:
             "version": "v1",
         }
 
-    def _record(self, name: str, store: object, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
-        self.calls.append((name, store, args, kwargs))
+    def _record(self, name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
+        self.calls.append((name, args, kwargs))
 
-    async def put(self, store: object, *args: object, **kwargs: object) -> object:
-        self._record("put", store, args, kwargs)
+    async def put(self, *args: object, **kwargs: object) -> object:
+        self._record("put", args, kwargs)
         if self.put_error is not None:
             raise self.put_error
         return self.put_response
 
-    async def get(self, store: object, *args: object, **kwargs: object) -> object:
-        self._record("get", store, args, kwargs)
+    async def get(self, *args: object, **kwargs: object) -> object:
+        self._record("get", args, kwargs)
         return b"downloaded"
 
-    async def get_range(self, store: object, *args: object, **kwargs: object) -> object:
-        self._record("get_range", store, args, kwargs)
+    async def get_range(self, *args: object, **kwargs: object) -> object:
+        self._record("get_range", args, kwargs)
         return b"range"
 
-    async def delete(self, store: object, *args: object, **kwargs: object) -> object:
-        self._record("delete", store, args, kwargs)
+    async def delete(self, *args: object, **kwargs: object) -> object:
+        self._record("delete", args, kwargs)
         return None
 
 
@@ -82,7 +82,7 @@ def _clock(values: list[datetime]):
 
 def _configure_remote_file(*, store_ops: FakeStoreOps, now_values: list[datetime]) -> None:
     remote_file = cast("RemoteStorage", FileModel.__table__.c.file.type)
-    remote_file.store_ops = store_ops
+    remote_file.store = store_ops
     remote_file.now = _clock(now_values)
 
 
@@ -114,8 +114,8 @@ async def test_upload_success_updates_metadata_and_uses_model_method() -> None:
     assert model.file.status is UploadStatus.COMPLETE
     assert session.flush_calls == 2
     assert [name for name, *_rest in store_ops.calls] == ["put"]
-    assert store_ops.calls[0][2][0] == "user-123/file"
-    assert store_ops.calls[0][2][1] == b"hello"
+    assert store_ops.calls[0][1][0] == "user-123/file"
+    assert store_ops.calls[0][1][1] == b"hello"
 
 
 @pytest.mark.asyncio
@@ -193,9 +193,9 @@ async def test_download_read_range_and_delete() -> None:
     assert ranged == b"range"
     assert model.file is None
     assert [name for name, *_rest in store_ops.calls] == ["get", "get_range", "delete"]
-    assert store_ops.calls[0][2][0] == "folder/item.txt"
-    assert store_ops.calls[1][2][0] == "folder/item.txt"
-    assert store_ops.calls[2][2][0] == "folder/item.txt"
+    assert store_ops.calls[0][1][0] == "folder/item.txt"
+    assert store_ops.calls[1][1][0] == "folder/item.txt"
+    assert store_ops.calls[2][1][0] == "folder/item.txt"
 
 
 @pytest.mark.asyncio

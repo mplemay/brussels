@@ -6,9 +6,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 try:
-    from brussels.files import find_cleanup_candidates, is_cleanup_candidate
-    from brussels.types import RemoteFile, UploadStatus
-except ModuleNotFoundError:
+    from brussels.types.file import (
+        RemoteFile,
+        UploadStatus,
+        find_cleanup_candidates,
+        is_cleanup_candidate,
+    )
+except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
 

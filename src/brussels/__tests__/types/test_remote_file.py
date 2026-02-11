@@ -12,9 +12,9 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from brussels.base import Base
 
 try:
-    from brussels.types import RemoteFile, RemoteStorage, UploadStatus
-except ModuleNotFoundError:
-    pytest.skip("pydantic optional dependency not installed", allow_module_level=True)
+    from brussels.types.file import RemoteFile, RemoteStorage, UploadStatus
+except ImportError:
+    pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

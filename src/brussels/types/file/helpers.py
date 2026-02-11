@@ -3,10 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
-from brussels.types.file.file import RemoteFile, UploadStatus
+from brussels.types.file.file import RemoteMetadata, UploadStatus
+from brussels.types.file.storage import RemoteFile, RemoteMetadataField
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.orm import Session
 
 T = TypeVar("T")
 
@@ -19,7 +23,7 @@ def _ensure_utc(value: datetime) -> datetime:
 
 
 def is_cleanup_candidate(
-    metadata: RemoteFile | None,
+    metadata: RemoteMetadata | None,
     *,
     now: datetime,
     stale_after: timedelta,
@@ -39,8 +43,29 @@ def is_cleanup_candidate(
 def find_cleanup_candidates(
     items: list[T],
     *,
-    extractor: Callable[[T], RemoteFile | None],
+    extractor: Callable[[T], RemoteMetadata | None],
     now: datetime,
     stale_after: timedelta,
 ) -> list[T]:
     return [item for item in items if is_cleanup_candidate(extractor(item), now=now, stale_after=stale_after)]
+
+
+async def cleanup_remote_fields(
+    *,
+    model: object,
+    fields: list[RemoteMetadataField] | tuple[RemoteMetadataField, ...],
+    session: Session | AsyncSession | None = None,
+    flush: bool = False,
+    delete_remote: bool = True,
+    **delete_kwargs: object,
+) -> None:
+    for field in fields:
+        remote_file = RemoteFile.from_field(model, field)
+        if remote_file.metadata is None:
+            continue
+        await remote_file.delete(
+            session=session,
+            flush=flush,
+            delete_remote=delete_remote,
+            **delete_kwargs,
+        )

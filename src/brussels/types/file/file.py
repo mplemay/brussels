@@ -9,9 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator  # ty: ignore
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from brussels.types.file.storage import RemoteFieldHandle
-
-type RemoteFileDict = dict[str, object]
+type RemoteMetadataDict = dict[str, object]
 
 
 class SupportsFileId(Protocol):
@@ -25,7 +23,7 @@ class UploadStatus(StrEnum):
     DELETED = "deleted"
 
 
-class RemoteFile(BaseModel):
+class RemoteMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema: Literal[1] = 1
@@ -52,15 +50,9 @@ class RemoteFile(BaseModel):
             value = value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
-    def to_dict(self) -> RemoteFileDict:
-        return cast("RemoteFileDict", self.model_dump(mode="json"))
+    def to_dict(self) -> RemoteMetadataDict:
+        return cast("RemoteMetadataDict", self.model_dump(mode="json"))
 
     @classmethod
-    def from_dict(cls, data: RemoteFileDict) -> Self:
+    def from_dict(cls, data: RemoteMetadataDict) -> Self:
         return cls.model_validate(data)
-
-    @classmethod
-    def from_field(cls, model: object, field: object) -> RemoteFieldHandle:
-        from brussels.types.file.storage import RemoteFieldHandle  # noqa: PLC0415
-
-        return RemoteFieldHandle.from_field(model, field)

@@ -10,7 +10,7 @@ from brussels.base import Base
 try:
     from obstore.store import MemoryStore  # ty: ignore[unresolved-import]
 
-    from brussels.types.file import RemoteFile, RemoteStorage
+    from brussels.types.file import RemoteFile, RemoteMetadata, RemoteStorage
 except ImportError as exc:
     msg = "This example requires optional dependencies. Install with: pip install 'brussels[files]'"
     raise SystemExit(msg) from exc
@@ -20,7 +20,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    file: Mapped[RemoteFile | None] = mapped_column(
+    file: Mapped[RemoteMetadata | None] = mapped_column(
         RemoteStorage(
             store=MemoryStore(),
         ),

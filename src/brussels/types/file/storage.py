@@ -3,19 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from inspect import isawaitable
-from typing import TYPE_CHECKING, Self, cast
+from typing import TYPE_CHECKING, Self, TypeVar, cast
 from uuid import UUID
 
 from pydantic import ValidationError  # ty: ignore[unresolved-import]
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.types import TypeDecorator
 
-from brussels.types.file.file import RemoteFile, RemoteFileDict, SupportsFileId, UploadStatus
+from brussels.types.file.file import RemoteMetadata, RemoteMetadataDict, SupportsFileId, UploadStatus
 from brussels.types.json_type import Json
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore  # ty: ignore[unresolved-import]
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
+
+ModelT = TypeVar("ModelT", bound=object)
+type RemoteMetadataField = InstrumentedAttribute[RemoteMetadata | None]
 
 
 def _extract_value(result: object, *field_names: str) -> object | None:
@@ -53,7 +57,7 @@ def _extract_optional_int(result: object, *field_names: str) -> int | None:
     return value
 
 
-class RemoteStorage(TypeDecorator[RemoteFile]):
+class RemoteStorage(TypeDecorator[RemoteMetadata]):
     impl = Json
     cache_ok = False
 
@@ -70,15 +74,15 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
 
     def process_bind_param(
         self,
-        value: RemoteFile | RemoteFileDict | None,
+        value: RemoteMetadata | RemoteMetadataDict | None,
         _dialect: object,
-    ) -> RemoteFileDict | None:  # type: ignore[override]
+    ) -> RemoteMetadataDict | None:  # type: ignore[override]
         if value is None:
             return None
         try:
-            metadata = value if isinstance(value, RemoteFile) else RemoteFile.from_dict(value)
+            metadata = value if isinstance(value, RemoteMetadata) else RemoteMetadata.from_dict(value)
         except ValidationError as exc:
-            msg = "RemoteStorage RemoteFile metadata is invalid."
+            msg = "RemoteStorage RemoteMetadata is invalid."
             raise ValueError(msg) from exc
         return metadata.to_dict()
 
@@ -86,7 +90,7 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         self,
         value: object,
         _dialect: object,
-    ) -> RemoteFile | None:  # type: ignore[override]
+    ) -> RemoteMetadata | None:  # type: ignore[override]
         if value is None:
             return None
         if not isinstance(value, dict):
@@ -94,9 +98,9 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
             msg = f"RemoteStorage expected dict from database, got {type_name}."
             raise TypeError(msg)
         try:
-            return RemoteFile.from_dict(cast("RemoteFileDict", value))
+            return RemoteMetadata.from_dict(cast("RemoteMetadataDict", value))
         except ValidationError as exc:
-            msg = "RemoteStorage RemoteFile metadata from database is invalid."
+            msg = "RemoteStorage RemoteMetadata from database is invalid."
             raise ValueError(msg) from exc
 
     @staticmethod
@@ -119,20 +123,20 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
             await maybe_awaitable
 
     @staticmethod
-    def _get_metadata(*, model: object, field_name: str) -> RemoteFile | None:
+    def _get_metadata(*, model: object, field_name: str) -> RemoteMetadata | None:
         if (value := getattr(model, field_name)) is None:
             return None
-        if isinstance(value, RemoteFile):
+        if isinstance(value, RemoteMetadata):
             return value
         if isinstance(value, dict):
-            metadata = RemoteFile.from_dict(value)
+            metadata = RemoteMetadata.from_dict(value)
             setattr(model, field_name, metadata)
             return metadata
         type_name = type(value).__name__
-        msg = f"Model field '{field_name}' must hold RemoteFile | dict | None, got {type_name}."
+        msg = f"Model field '{field_name}' must hold RemoteMetadata | dict | None, got {type_name}."
         raise TypeError(msg)
 
-    def get_metadata(self, *, model: object, field_name: str) -> RemoteFile | None:
+    def get_metadata(self, *, model: object, field_name: str) -> RemoteMetadata | None:
         return self._get_metadata(model=model, field_name=field_name)
 
     async def _put(self, *args: object, **kwargs: object) -> object:
@@ -160,11 +164,11 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         session: Session | AsyncSession | None = None,
         flush: bool = False,
         **put_kwargs: object,
-    ) -> RemoteFile:
+    ) -> RemoteMetadata:
         metadata = self._get_metadata(model=model, field_name=field_name)
         if metadata is None:
             now = datetime.now(UTC)
-            metadata = RemoteFile(
+            metadata = RemoteMetadata(
                 bucket=bucket,
                 key=key or self.build_key(model_id=self._model_id(model), field_name=field_name),
                 url=url,
@@ -282,7 +286,7 @@ class RemoteStorage(TypeDecorator[RemoteFile]):
         await self._flush(session=session, flush=flush)
 
 
-def _resolve_remote_storage(model: object, *, field: object) -> tuple[str, RemoteStorage]:
+def _resolve_remote_storage(model: object, *, field: RemoteMetadataField) -> tuple[str, RemoteStorage]:
     if not isinstance(field_name := getattr(field, "key", None), str):
         msg = "RemoteStorage operations require a mapped SQLAlchemy field."
         raise TypeError(msg)
@@ -305,17 +309,18 @@ def _resolve_remote_storage(model: object, *, field: object) -> tuple[str, Remot
 
 
 @dataclass(slots=True, kw_only=True)
-class RemoteFieldHandle:
+class RemoteFile:
     model: object
     field_name: str
     remote_storage: RemoteStorage
 
     @classmethod
-    def from_field(cls, model: object, field: object) -> Self:
+    def from_field(cls, model: ModelT, field: RemoteMetadataField) -> Self:
         field_name, remote_storage = _resolve_remote_storage(model, field=field)
         return cls(model=model, field_name=field_name, remote_storage=remote_storage)
 
-    def metadata(self) -> RemoteFile | None:
+    @property
+    def metadata(self) -> RemoteMetadata | None:
         return self.remote_storage.get_metadata(model=self.model, field_name=self.field_name)
 
     async def upload(  # noqa: PLR0913
@@ -329,7 +334,7 @@ class RemoteFieldHandle:
         session: Session | AsyncSession | None = None,
         flush: bool = False,
         **put_kwargs: object,
-    ) -> RemoteFile:
+    ) -> RemoteMetadata:
         return await self.remote_storage.upload(
             model=cast("SupportsFileId", self.model),
             field_name=self.field_name,
@@ -366,27 +371,6 @@ class RemoteFieldHandle:
         await self.remote_storage.delete_file(
             model=self.model,
             field_name=self.field_name,
-            session=session,
-            flush=flush,
-            delete_remote=delete_remote,
-            **delete_kwargs,
-        )
-
-
-async def cleanup_remote_fields(
-    *,
-    model: object,
-    fields: list[object] | tuple[object, ...],
-    session: Session | AsyncSession | None = None,
-    flush: bool = False,
-    delete_remote: bool = True,
-    **delete_kwargs: object,
-) -> None:
-    for field in fields:
-        remote_field = RemoteFieldHandle.from_field(model, field)
-        if remote_field.metadata() is None:
-            continue
-        await remote_field.delete(
             session=session,
             flush=flush,
             delete_remote=delete_remote,

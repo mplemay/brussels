@@ -9,13 +9,13 @@ try:
 except ModuleNotFoundError as exc:
     raise ImportError(_FILE_IMPORT_ERROR) from exc
 else:
-    from .file import RemoteFile, UploadStatus
-    from .helpers import find_cleanup_candidates, is_cleanup_candidate
-    from .storage import RemoteFieldHandle, RemoteStorage, cleanup_remote_fields
+    from .file import RemoteMetadata, UploadStatus
+    from .helpers import cleanup_remote_fields, find_cleanup_candidates, is_cleanup_candidate
+    from .storage import RemoteFile, RemoteStorage
 
 __all__ = [
-    "RemoteFieldHandle",
     "RemoteFile",
+    "RemoteMetadata",
     "RemoteStorage",
     "UploadStatus",
     "cleanup_remote_fields",

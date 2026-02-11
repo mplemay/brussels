@@ -7,7 +7,7 @@ import pytest
 
 try:
     from brussels.types.file import (
-        RemoteFile,
+        RemoteMetadata,
         UploadStatus,
         find_cleanup_candidates,
         is_cleanup_candidate,
@@ -18,11 +18,11 @@ except ImportError:
 
 @dataclass
 class Row:
-    file: RemoteFile | None
+    file: RemoteMetadata | None
 
 
-def _metadata(*, status: UploadStatus, updated_at: datetime) -> RemoteFile:
-    return RemoteFile(
+def _metadata(*, status: UploadStatus, updated_at: datetime) -> RemoteMetadata:
+    return RemoteMetadata(
         key="folder/item.txt",
         status=status,
         created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),

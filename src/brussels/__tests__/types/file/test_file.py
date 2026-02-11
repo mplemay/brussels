@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from brussels.base import Base
 
 try:
-    from brussels.types.file import RemoteFile, RemoteStorage, UploadStatus
+    from brussels.types.file import RemoteMetadata, RemoteStorage, UploadStatus
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
@@ -22,7 +22,7 @@ class FileRecord(Base):
     __tablename__ = "file_records"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    file: Mapped[RemoteFile | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def engine() -> Iterator[Engine]:
 
 def test_process_bind_param_serializes_metadata() -> None:
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
-    metadata = RemoteFile(
+    metadata = RemoteMetadata(
         key="example/file.txt",
         status=UploadStatus.PENDING,
         created_at=now,
@@ -53,7 +53,7 @@ def test_process_bind_param_serializes_metadata() -> None:
 
 
 def test_process_bind_param_rejects_invalid_value_type() -> None:
-    with pytest.raises(ValueError, match="RemoteStorage RemoteFile metadata is invalid"):
+    with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata is invalid"):
         RemoteStorage(store=object()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
 
 
@@ -77,7 +77,7 @@ def test_process_result_value_returns_typed_metadata() -> None:
 
     metadata = RemoteStorage(store=object()).process_result_value(raw, None)
 
-    assert isinstance(metadata, RemoteFile)
+    assert isinstance(metadata, RemoteMetadata)
     assert metadata.status is UploadStatus.COMPLETE
     assert metadata.size_bytes == 8
 
@@ -101,7 +101,7 @@ def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
 
     with Session(engine) as session:
         record = FileRecord(
-            file=RemoteFile(
+            file=RemoteMetadata(
                 bucket="bucket",
                 key="example/file.txt",
                 status=UploadStatus.PENDING,
@@ -113,6 +113,6 @@ def test_orm_round_trip_returns_remote_file_metadata(engine: Engine) -> None:
         session.commit()
         session.refresh(record)
 
-        assert isinstance(record.file, RemoteFile)
+        assert isinstance(record.file, RemoteMetadata)
         assert record.file.status is UploadStatus.PENDING
         assert record.file.key == "example/file.txt"

@@ -8,7 +8,8 @@ from sqlalchemy.dialects.postgresql import dialect as postgres_dialect
 from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
 from sqlalchemy.orm import Mapped, mapped_column
 
-from brussels.base import Base
+from brussels.base import DataclassBase
+from brussels.mixins import PrimaryKeyMixin
 
 try:
     from brussels.types.file import (
@@ -25,22 +26,22 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
 
-    from brussels.types.file.remote_file import SupportsRemoteFileModel
 
-
-class FileModel(Base):
+class FileModel(DataclassBase, PrimaryKeyMixin):
     __tablename__ = "file_model"
 
-    id: Mapped[str | int | None] = mapped_column(primary_key=True)
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
-    attachment: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True, default=None)
+    attachment: Mapped[RemoteMetadata | None] = mapped_column(
+        RemoteStorage(store=object()),
+        nullable=True,
+        default=None,
+    )
 
 
-class OtherFileModel(Base):
+class OtherFileModel(DataclassBase, PrimaryKeyMixin):
     __tablename__ = "other_file_model"
 
-    id: Mapped[str | int | None] = mapped_column(primary_key=True)
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True)
+    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=object()), nullable=True, default=None)
 
 
 class SyncSessionSpy:
@@ -102,11 +103,11 @@ def _configure_remote_field(*, field_name: str, store_ops: FakeStoreOps) -> None
 
 
 def _file_handle(model: FileModel) -> RemoteFile:
-    return RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.file)
+    return RemoteFile.from_metadata(model, FileModel.file)
 
 
 def _attachment_handle(model: FileModel) -> RemoteFile:
-    return RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.attachment)
+    return RemoteFile.from_metadata(model, FileModel.attachment)
 
 
 def test_remote_file_compiles_to_jsonb_for_postgres() -> None:
@@ -134,25 +135,25 @@ def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
 
 
 def test_from_metadata_resolves_remote_storage_for_mapped_field() -> None:
-    model = FileModel(id="abc")
+    model = FileModel()
 
-    handle = RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.file)
+    handle = RemoteFile.from_metadata(model, FileModel.file)
 
     assert handle.field_name == "file"
 
 
 def test_from_metadata_rejects_non_remote_storage_field() -> None:
-    model = FileModel(id="abc")
+    model = FileModel()
 
     with pytest.raises(TypeError, match=r"must use brussels\.types\.file\.RemoteStorage"):
-        RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.id)  # type: ignore[arg-type]
+        RemoteFile.from_metadata(model, FileModel.id)  # type: ignore[arg-type]
 
 
 def test_from_metadata_rejects_field_from_different_model() -> None:
-    model = FileModel(id="abc")
+    model = FileModel()
 
     with pytest.raises(TypeError, match=r"is not mapped on model type"):
-        RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), OtherFileModel.file)
+        RemoteFile.from_metadata(model, OtherFileModel.file)
 
 
 def test_model_does_not_receive_dynamic_file_methods() -> None:
@@ -166,7 +167,8 @@ def test_model_does_not_receive_dynamic_file_methods() -> None:
 async def test_upload_success_updates_metadata() -> None:
     store_ops = FakeStoreOps()
     _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel(id="user-123")
+    model = FileModel()
+    expected_key = f"{model.id}/file"
     session = SyncSessionSpy()
 
     metadata = await _file_handle(model).upload(
@@ -177,14 +179,14 @@ async def test_upload_success_updates_metadata() -> None:
     )
 
     assert metadata.status is UploadStatus.COMPLETE
-    assert metadata.key == "user-123/file"
+    assert metadata.key == expected_key
     assert metadata.size_bytes == 5
     assert metadata.error_message is None
     assert model.file is not None
     assert model.file.status is UploadStatus.COMPLETE
     assert session.flush_calls == 2
     assert [name for name, *_rest in store_ops.calls] == ["put"]
-    assert store_ops.calls[0][1][0] == "user-123/file"
+    assert store_ops.calls[0][1][0] == expected_key
     assert store_ops.calls[0][1][1] == b"hello"
 
 
@@ -193,7 +195,7 @@ async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
     store_ops = FakeStoreOps()
     store_ops.put_error = RuntimeError("upload failed")
     _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel(id=42)
+    model = FileModel()
     session = AsyncSessionSpy()
 
     with pytest.raises(RuntimeError, match="upload failed"):
@@ -213,15 +215,13 @@ async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
 async def test_reupload_bucket_behavior() -> None:
     store_ops = FakeStoreOps()
     _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel(
-        id="user-123",
-        file=RemoteMetadata(
-            bucket="existing-bucket",
-            key="user-123/file",
-            status=UploadStatus.PENDING,
-            created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-            updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-        ),
+    model = FileModel()
+    model.file = RemoteMetadata(
+        bucket="existing-bucket",
+        key=f"{model.id}/file",
+        status=UploadStatus.PENDING,
+        created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+        updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
     )
 
     updated = await _file_handle(model).upload(data=b"hello")
@@ -241,7 +241,7 @@ async def test_download_read_range_and_delete() -> None:
         created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
         updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
     )
-    model = FileModel(id="abc", file=metadata)
+    model = FileModel(file=metadata)
 
     file_handle = _file_handle(model)
     downloaded = await file_handle.download()
@@ -260,7 +260,8 @@ async def test_download_read_range_and_delete() -> None:
 @pytest.mark.asyncio
 async def test_upload_requires_model_id() -> None:
     _configure_remote_field(field_name="file", store_ops=FakeStoreOps())
-    model = FileModel(id=None)
+    model = FileModel()
+    model.id = None  # type: ignore[assignment]
 
     with pytest.raises(ValueError, match=r"model\.id"):
         await _file_handle(model).upload(data=b"data")
@@ -269,7 +270,7 @@ async def test_upload_requires_model_id() -> None:
 @pytest.mark.asyncio
 async def test_download_read_range_and_delete_require_metadata() -> None:
     _configure_remote_field(field_name="file", store_ops=FakeStoreOps())
-    model = FileModel(id="abc", file=None)
+    model = FileModel(file=None)
     file_handle = _file_handle(model)
 
     with pytest.raises(ValueError, match="has no file metadata"):
@@ -288,7 +289,6 @@ async def test_cleanup_remote_fields_deletes_multiple_fields() -> None:
     _configure_remote_field(field_name="attachment", store_ops=attachment_store)
     created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     model = FileModel(
-        id="abc",
         file=RemoteMetadata(
             key="folder/file.txt",
             status=UploadStatus.COMPLETE,
@@ -322,7 +322,6 @@ async def test_cleanup_remote_fields_is_fail_fast() -> None:
     _configure_remote_field(field_name="attachment", store_ops=attachment_store)
     created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     model = FileModel(
-        id="abc",
         file=RemoteMetadata(
             key="folder/file.txt",
             status=UploadStatus.COMPLETE,
@@ -354,7 +353,6 @@ async def test_cleanup_remote_fields_skips_empty_metadata() -> None:
     _configure_remote_field(field_name="attachment", store_ops=attachment_store)
     created_at = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     model = FileModel(
-        id="abc",
         file=None,
         attachment=RemoteMetadata(
             key="folder/attachment.txt",
@@ -373,9 +371,9 @@ async def test_cleanup_remote_fields_skips_empty_metadata() -> None:
 
 
 def test_remote_file_from_metadata_returns_handle() -> None:
-    model = FileModel(id="abc")
+    model = FileModel()
 
-    handle = RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), FileModel.file)
+    handle = RemoteFile.from_metadata(model, FileModel.file)
 
     assert isinstance(handle, RemoteFile)
     assert handle.field_name == "file"
@@ -385,7 +383,7 @@ def test_remote_file_from_metadata_returns_handle() -> None:
 async def test_remote_file_metadata_property_tracks_field_updates() -> None:
     store_ops = FakeStoreOps()
     _configure_remote_field(field_name="file", store_ops=store_ops)
-    model = FileModel(id="abc")
+    model = FileModel()
     file_handle = _file_handle(model)
 
     assert file_handle.metadata is None
@@ -399,7 +397,7 @@ async def test_remote_file_metadata_property_tracks_field_updates() -> None:
 
 
 def test_attachment_field_handle_resolves() -> None:
-    model = FileModel(id="abc")
+    model = FileModel()
 
     handle = _attachment_handle(model)
 

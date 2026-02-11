@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar
 
 from brussels.types.file.file import RemoteMetadata, UploadStatus
-from brussels.types.file.remote_file import RemoteFile, RemoteMetadataField, SupportsRemoteFileModel
+from brussels.types.file.remote_file import RemoteFile, RemoteMetadataField
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
+
+    from brussels.mixins import PrimaryKeyMixin
 
 T = TypeVar("T")
 
@@ -52,7 +54,7 @@ def find_cleanup_candidates(
 
 async def cleanup_remote_fields(
     *,
-    model: object,
+    model: PrimaryKeyMixin,
     fields: list[RemoteMetadataField] | tuple[RemoteMetadataField, ...],
     session: Session | AsyncSession | None = None,
     flush: bool = False,
@@ -60,7 +62,7 @@ async def cleanup_remote_fields(
     **delete_kwargs: object,
 ) -> None:
     for field in fields:
-        remote_file = RemoteFile.from_metadata(cast("SupportsRemoteFileModel", model), field)
+        remote_file = RemoteFile.from_metadata(model, field)
         if remote_file.metadata is None:
             continue
         await remote_file.delete(

@@ -1,37 +1,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Self, TypeVar, cast
 
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
+from brussels.mixins import PrimaryKeyMixin
 from brussels.types.file.file import RemoteMetadata, SupportsFileId
 from brussels.types.file.storage import RemoteStorage
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
 
-
-class SupportsRemoteFileModel(Protocol):
-    id: str | int | UUID | None
-    __table__: object
-
-
-ModelT = TypeVar("ModelT", bound=SupportsRemoteFileModel)
+ModelT = TypeVar("ModelT", bound=PrimaryKeyMixin)
 type RemoteMetadataField = InstrumentedAttribute[RemoteMetadata | None]
 
 
 @dataclass(slots=True, kw_only=True)
 class RemoteFile:
-    model: SupportsRemoteFileModel
+    model: PrimaryKeyMixin
     field_name: str
     remote_storage: RemoteStorage
 
     @classmethod
     def from_metadata(cls, model: ModelT, field: RemoteMetadataField) -> Self:
+        if not isinstance(model, PrimaryKeyMixin):
+            msg = "RemoteStorage operations require models that inherit from brussels.mixins.PrimaryKeyMixin."
+            raise TypeError(msg)
         if not isinstance(field_name := getattr(field, "key", None), str):
             msg = "RemoteStorage operations require a mapped SQLAlchemy field."
             raise TypeError(msg)

@@ -5,8 +5,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import Engine, create_engine
-from sqlalchemy.dialects.postgresql import dialect as postgres_dialect
-from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from brussels.base import Base
@@ -36,30 +34,6 @@ def engine() -> Iterator[Engine]:
         engine.dispose()
 
 
-def test_remote_file_compiles_to_jsonb_for_postgres() -> None:
-    compiled = RemoteStorage(store=object()).compile(dialect=postgres_dialect())
-    assert "JSONB" in compiled
-
-
-def test_remote_file_compiles_to_json_for_sqlite() -> None:
-    compiled = RemoteStorage(store=object()).compile(dialect=sqlite_dialect())
-    assert "JSON" in compiled
-
-
-def test_build_key_is_deterministic_model_id_and_field() -> None:
-    remote_file = RemoteStorage(store=object())
-
-    assert remote_file.build_key(model_id="abc", field_name="file") == "abc/file"
-    assert remote_file.build_key(model_id=42, field_name="file") == "42/file"
-
-
-def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
-    with pytest.raises(TypeError):
-        RemoteStorage(store=object(), key_prefix="uploads")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        RemoteStorage(store=object(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
-
-
 def test_process_bind_param_serializes_metadata() -> None:
     now = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
     metadata = RemoteFile(
@@ -72,6 +46,7 @@ def test_process_bind_param_serializes_metadata() -> None:
     bound = RemoteStorage(store=object()).process_bind_param(metadata, None)
 
     assert bound is not None
+    assert bound["schema"] == 1
     assert bound["key"] == "example/file.txt"
     assert bound["status"] == "pending"
     assert bound["created_at"] == now.isoformat()
@@ -84,7 +59,7 @@ def test_process_bind_param_rejects_invalid_value_type() -> None:
 
 def test_process_result_value_returns_typed_metadata() -> None:
     raw = {
-        "schema_version": 1,
+        "schema": 1,
         "bucket": "bucket",
         "key": "example/file.txt",
         "url": None,

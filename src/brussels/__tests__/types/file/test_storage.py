@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from typing import cast
 
 import pytest
+from sqlalchemy.dialects.postgresql import dialect as postgres_dialect
+from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
 from sqlalchemy.orm import Mapped, mapped_column
 
 from brussels.base import Base
@@ -71,31 +73,39 @@ class FakeStoreOps:
         return None
 
 
-def _clock(values: list[datetime]):
-    def now() -> datetime:
-        if values:
-            return values.pop(0)
-        return datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
-
-    return now
-
-
-def _configure_remote_file(*, store_ops: FakeStoreOps, now_values: list[datetime]) -> None:
+def _configure_remote_file(*, store_ops: FakeStoreOps) -> None:
     remote_file = cast("RemoteStorage", FileModel.__table__.c.file.type)
     remote_file.store = store_ops
-    remote_file.now = _clock(now_values)
+
+
+def test_remote_file_compiles_to_jsonb_for_postgres() -> None:
+    compiled = RemoteStorage(store=object()).compile(dialect=postgres_dialect())
+    assert "JSONB" in compiled
+
+
+def test_remote_file_compiles_to_json_for_sqlite() -> None:
+    compiled = RemoteStorage(store=object()).compile(dialect=sqlite_dialect())
+    assert "JSON" in compiled
+
+
+def test_build_key_is_deterministic_model_id_and_field() -> None:
+    remote_file = RemoteStorage(store=object())
+
+    assert remote_file.build_key(model_id="abc", field_name="file") == "abc/file"
+    assert remote_file.build_key(model_id=42, field_name="file") == "42/file"
+
+
+def test_remote_file_rejects_removed_key_prefix_and_key_factory_args() -> None:
+    with pytest.raises(TypeError):
+        RemoteStorage(store=object(), key_prefix="uploads")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        RemoteStorage(store=object(), key_factory=lambda _model_id, _filename: "x")  # type: ignore[call-arg]
 
 
 @pytest.mark.asyncio
 async def test_upload_success_updates_metadata_and_uses_model_method() -> None:
     store_ops = FakeStoreOps()
-    _configure_remote_file(
-        store_ops=store_ops,
-        now_values=[
-            datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-            datetime(2025, 1, 1, 12, 1, tzinfo=UTC),
-        ],
-    )
+    _configure_remote_file(store_ops=store_ops)
     model = FileModel(id="user-123")
     session = SyncSessionSpy()
 
@@ -122,13 +132,7 @@ async def test_upload_success_updates_metadata_and_uses_model_method() -> None:
 async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
     store_ops = FakeStoreOps()
     store_ops.put_error = RuntimeError("upload failed")
-    _configure_remote_file(
-        store_ops=store_ops,
-        now_values=[
-            datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-            datetime(2025, 1, 1, 12, 1, tzinfo=UTC),
-        ],
-    )
+    _configure_remote_file(store_ops=store_ops)
     model = FileModel(id=42)
     session = AsyncSessionSpy()
 
@@ -148,10 +152,7 @@ async def test_upload_failure_marks_metadata_failed_and_re_raises() -> None:
 @pytest.mark.asyncio
 async def test_reupload_bucket_behavior() -> None:
     store_ops = FakeStoreOps()
-    _configure_remote_file(
-        store_ops=store_ops,
-        now_values=[datetime(2025, 1, 1, 12, 1, tzinfo=UTC), datetime(2025, 1, 1, 12, 2, tzinfo=UTC)],
-    )
+    _configure_remote_file(store_ops=store_ops)
     model = FileModel(
         id="user-123",
         file=RemoteFile(
@@ -173,10 +174,7 @@ async def test_reupload_bucket_behavior() -> None:
 @pytest.mark.asyncio
 async def test_download_read_range_and_delete() -> None:
     store_ops = FakeStoreOps()
-    _configure_remote_file(
-        store_ops=store_ops,
-        now_values=[datetime(2025, 1, 1, 12, 1, tzinfo=UTC)],
-    )
+    _configure_remote_file(store_ops=store_ops)
     metadata = RemoteFile(
         key="folder/item.txt",
         status=UploadStatus.COMPLETE,
@@ -200,10 +198,7 @@ async def test_download_read_range_and_delete() -> None:
 
 @pytest.mark.asyncio
 async def test_upload_requires_model_id() -> None:
-    _configure_remote_file(
-        store_ops=FakeStoreOps(),
-        now_values=[datetime(2025, 1, 1, 12, 0, tzinfo=UTC)],
-    )
+    _configure_remote_file(store_ops=FakeStoreOps())
     model = FileModel(id=None)
 
     with pytest.raises(ValueError, match=r"model\.id"):
@@ -212,10 +207,7 @@ async def test_upload_requires_model_id() -> None:
 
 @pytest.mark.asyncio
 async def test_download_read_range_and_delete_require_metadata() -> None:
-    _configure_remote_file(
-        store_ops=FakeStoreOps(),
-        now_values=[datetime(2025, 1, 1, 12, 0, tzinfo=UTC)],
-    )
+    _configure_remote_file(store_ops=FakeStoreOps())
     model = FileModel(id="abc", file=None)
 
     with pytest.raises(ValueError, match="has no file metadata"):

@@ -24,14 +24,11 @@ class PrimaryKeyMixin(MappedAsDataclass):
     The UUID is:
     - Generated client-side by default (uuid4)
     - Has server-side fallback (gen_random_uuid() for PostgreSQL)
-    - Indexed and unique for efficient lookups
     """
 
     id: Mapped[UUID] = mapped_column(
         primary_key=True,
         default_factory=uuid4,
         server_default=func.gen_random_uuid(),
-        index=True,
-        unique=True,
         init=False,
     )

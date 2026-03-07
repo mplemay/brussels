@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import ValidationError
@@ -9,6 +10,9 @@ try:
     from brussels.types.file import RemoteMetadata
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
+
+if TYPE_CHECKING:
+    from brussels.types.file.metadata import RemoteMetadataDict
 
 
 def test_to_dict_and_from_dict_round_trip_with_aliases() -> None:
@@ -33,7 +37,7 @@ def test_to_dict_and_from_dict_round_trip_with_aliases() -> None:
 
 
 def test_schema_alias_is_accepted_and_serialized() -> None:
-    data = {
+    data: RemoteMetadataDict = {
         "schema": 1,
         "key": "alias/file.txt",
         "status": "pending",
@@ -64,11 +68,13 @@ def test_datetime_fields_are_normalized_to_utc() -> None:
 
 def test_invalid_status_is_rejected() -> None:
     with pytest.raises(ValidationError, match="status"):
-        RemoteMetadata(
-            key="example/file.txt",
-            status="deleted",  # type: ignore[arg-type]
-            created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
-            updated_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+        RemoteMetadata.model_validate(
+            {
+                "key": "example/file.txt",
+                "status": "deleted",
+                "created_at": datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+                "updated_at": datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+            },
         )
 
 

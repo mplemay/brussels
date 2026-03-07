@@ -32,8 +32,6 @@ def test_id_column_definition() -> None:
     column = table.c.id
 
     assert column.primary_key is True
-    assert column.unique is True
-    assert any("id" in index.columns for index in table.indexes)
 
     server_default = column.server_default
     assert server_default is not None

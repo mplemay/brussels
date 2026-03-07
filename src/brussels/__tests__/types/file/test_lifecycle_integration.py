@@ -734,7 +734,7 @@ def test_snapshot_put_payload_rejects_invalid_read_result_and_input_type() -> No
 
 @pytest.mark.asyncio
 async def test_snapshot_put_payload_async_supports_async_iterable() -> None:
-    async def chunks() -> AsyncIterator[object]:
+    async def chunks() -> AsyncIterator[bytes | bytearray | memoryview]:
         yield b"a"
         yield bytearray(b"b")
         yield memoryview(b"c")

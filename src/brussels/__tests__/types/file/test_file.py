@@ -18,7 +18,7 @@ except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
 
 if TYPE_CHECKING:
-    from obstore import Attributes, GetOptions, PutMode
+    from obstore import GetOptions, PutMode
     from sqlalchemy import Engine
 
     from brussels.types.file._types import RemoteMetadataField
@@ -202,7 +202,7 @@ async def test_put_async_without_sqlalchemy_session_raises_and_does_not_call_sto
     with pytest.raises(RuntimeError, match="requires a resolvable SQLAlchemy session"):
         await _file_handle(model).put_async(
             b"hello",
-            attributes=cast("Attributes", {"cache_control": "max-age=60"}),
+            attributes={"cache_control": "max-age=60"},
             tags={"kind": "avatar"},
             mode=cast("PutMode", "overwrite"),
             use_multipart=True,
@@ -225,7 +225,7 @@ async def test_put_async_propagates_upload_options_with_attached_session(engine:
         session.flush()
         await _file_handle(model).put_async(
             b"hello",
-            attributes=cast("Attributes", {"cache_control": "max-age=60"}),
+            attributes={"cache_control": "max-age=60"},
             tags={"kind": "avatar"},
             mode=cast("PutMode", "overwrite"),
             use_multipart=True,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy.dialects.postgresql import dialect as postgres_dialect
@@ -12,6 +13,9 @@ try:
     from brussels.types.file import RemoteMetadata, RemoteStorage
 except ImportError:
     pytest.skip("files optional dependencies not installed", allow_module_level=True)
+
+if TYPE_CHECKING:
+    from brussels.types.file.metadata import RemoteMetadataDict
 
 
 class ModelWithMetadataField:
@@ -64,7 +68,7 @@ def test_process_bind_param_serializes_metadata() -> None:
 
 
 def test_process_bind_param_accepts_dict_payload() -> None:
-    raw = {
+    raw: RemoteMetadataDict = {
         "schema": 1,
         "key": "example/file.txt",
         "status": "pending",

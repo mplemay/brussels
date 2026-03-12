@@ -73,6 +73,13 @@ class RemoteFile[M: PrimaryKeyMixin]:
         return str(model_id)
 
     @staticmethod
+    def _missing_model_id_message(*, operation: str) -> str:
+        return (
+            f"RemoteStorage {operation} requires model.id to be set. "
+            f"Pass flush=True or flush the model before calling {operation}."
+        )
+
+    @staticmethod
     def _flush_sync(*, session: Session | None, flush: bool) -> None:
         if not flush or session is None:
             return
@@ -85,6 +92,44 @@ class RemoteFile[M: PrimaryKeyMixin]:
         maybe_awaitable = session.flush()
         if isawaitable(maybe_awaitable):
             await maybe_awaitable
+
+    def _ensure_model_id_ready_sync(
+        self,
+        *,
+        session: Session | None,
+        flush: bool,
+        operation: str,
+    ) -> None:
+        if getattr(self.model, "id", None) is not None:
+            return
+        if not flush:
+            raise ValueError(self._missing_model_id_message(operation=operation))
+
+        self._flush_sync(session=session, flush=True)
+        if getattr(self.model, "id", None) is not None:
+            return
+
+        msg = f"RemoteStorage {operation} requires model.id to be set after flush."
+        raise ValueError(msg)
+
+    async def _ensure_model_id_ready_async(
+        self,
+        *,
+        session: Session | AsyncSession | None,
+        flush: bool,
+        operation: str,
+    ) -> None:
+        if getattr(self.model, "id", None) is not None:
+            return
+        if not flush:
+            raise ValueError(self._missing_model_id_message(operation=operation))
+
+        await self._flush_async(session=session, flush=True)
+        if getattr(self.model, "id", None) is not None:
+            return
+
+        msg = f"RemoteStorage {operation} requires model.id to be set after flush."
+        raise ValueError(msg)
 
     @staticmethod
     def _resolve_sync_session(
@@ -168,6 +213,11 @@ class RemoteFile[M: PrimaryKeyMixin]:
         flush: bool = False,
     ) -> PutResult:
         resolved_session = self._required_sync_session(session=session, operation="put")
+        self._ensure_model_id_ready_sync(
+            session=session or resolved_session,
+            flush=flush,
+            operation="put",
+        )
         metadata = self._prepare_pending_metadata(
             key=key,
             content_type=content_type,
@@ -207,6 +257,11 @@ class RemoteFile[M: PrimaryKeyMixin]:
         flush: bool = False,
     ) -> PutResult:
         resolved_session = self._required_sync_session(session=session, operation="put")
+        await self._ensure_model_id_ready_async(
+            session=session or resolved_session,
+            flush=flush,
+            operation="put_async",
+        )
         metadata = self._prepare_pending_metadata(
             key=key,
             content_type=content_type,

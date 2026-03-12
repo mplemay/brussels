@@ -35,17 +35,14 @@ class PrimaryKeyMixin(MappedAsDataclass):
 
 
 @declarative_mixin
-class UUIDv7PrimaryKeyMixin(MappedAsDataclass):
+class UUIDv7PrimaryKeyMixin(PrimaryKeyMixin):
     """Mixin that adds a PostgreSQL 18+ UUIDv7 primary key column.
 
-    Inherits from MappedAsDataclass to support standalone usage without Base.
-    When used with DataclassBase (which also inherits MappedAsDataclass), the
-    duplicate inheritance is safely handled by Python's MRO (Method Resolution Order).
-
-    The id field is excluded from __init__ (init=False) and is generated during
-    insert using PostgreSQL's uuidv7() function. Because the UUID is database
-    generated, it is not guaranteed to be populated until the row is flushed or
-    inserted.
+    Extends PrimaryKeyMixin so models continue to satisfy APIs that require the
+    existing primary-key mixin contract. The id field is excluded from __init__
+    (init=False) and is generated during insert using PostgreSQL's uuidv7()
+    function. Because the UUID is database generated, ID-derived workflows
+    require the row to be flushed or already persisted.
 
     Usage:
         class MyModel(DataclassBase, UUIDv7PrimaryKeyMixin, TimestampMixin):

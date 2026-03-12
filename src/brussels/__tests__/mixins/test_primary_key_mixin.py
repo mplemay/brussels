@@ -95,3 +95,9 @@ def test_uuidv7_id_is_not_populated_before_flush() -> None:
     widget = UUIDv7Widget(name="widget")
 
     assert widget.id is None
+
+
+def test_uuidv7_models_satisfy_primary_key_mixin_contract() -> None:
+    widget = UUIDv7Widget(name="widget")
+
+    assert isinstance(widget, PrimaryKeyMixin)

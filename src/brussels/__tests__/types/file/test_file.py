@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from sys import version_info
 from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid4
 
@@ -163,15 +164,19 @@ def test_put_sync_flush_populates_uuidv7_id_before_key_generation(
 
     with Session(engine) as session:
         model = UUIDv7FileModel()
+        if version_info >= (3, 14):
+            assert isinstance(model.id, UUID)
+            assert model.id.version == 7
+        else:
+            assert model.id is None
         session.add(model)
-        assigned_id = uuid4()
         flush_calls = 0
 
         def fake_flush() -> None:
             nonlocal flush_calls
             flush_calls += 1
-            if model.id is None:
-                model.id = assigned_id
+            if version_info < (3, 14) and model.id is None:
+                model.id = uuid4()
 
         monkeypatch.setattr(session, "flush", fake_flush)
 
@@ -183,10 +188,14 @@ def test_put_sync_flush_populates_uuidv7_id_before_key_generation(
         )
 
         assert put_result == {"e_tag": None, "version": None}
-        assert flush_calls == 2
-        assert model.id == assigned_id
+        assert flush_calls == (1 if version_info >= (3, 14) else 2)
+        assert isinstance(model.id, UUID)
+        if version_info >= (3, 14):
+            assert model.id.version == 7
+        else:
+            assert model.id.version == 4
         assert model.file is not None
-        assert model.file.key == f"{assigned_id}/file"
+        assert model.file.key == f"{model.id}/file"
         assert model.file.status == "pending"
         assert store_ops.calls == []
 
@@ -199,15 +208,32 @@ def test_put_sync_rejects_uuidv7_model_without_flush(engine: Engine) -> None:
         model = UUIDv7FileModel()
         session.add(model)
 
-        with pytest.raises(ValueError, match=r"Pass flush=True or flush the model before calling put"):
-            _uuidv7_file_handle(model).put(
+        if version_info >= (3, 14):
+            assert isinstance(model.id, UUID)
+            assert model.id.version == 7
+
+            put_result = _uuidv7_file_handle(model).put(
                 b"hello",
                 content_type="text/plain",
                 session=session,
+                flush=False,
             )
 
-        assert model.file is None
-        assert store_ops.calls == []
+            assert put_result == {"e_tag": None, "version": None}
+            assert model.file is not None
+            assert model.file.key == f"{model.id}/file"
+            assert model.file.status == "pending"
+            assert store_ops.calls == []
+        else:
+            with pytest.raises(ValueError, match=r"Pass flush=True or flush the model before calling put"):
+                _uuidv7_file_handle(model).put(
+                    b"hello",
+                    content_type="text/plain",
+                    session=session,
+                )
+
+            assert model.file is None
+            assert store_ops.calls == []
 
 
 def test_put_sync_defers_and_commits_when_sqlalchemy_session_is_attached(engine: Engine) -> None:
@@ -353,15 +379,19 @@ async def test_put_async_flush_populates_uuidv7_id_before_key_generation(engine:
 
     with Session(engine) as session:
         model = UUIDv7FileModel()
+        if version_info >= (3, 14):
+            assert isinstance(model.id, UUID)
+            assert model.id.version == 7
+        else:
+            assert model.id is None
         session.add(model)
-        assigned_id = uuid4()
         flush_calls = 0
 
         def on_flush() -> None:
             nonlocal flush_calls
             flush_calls += 1
-            if model.id is None:
-                model.id = assigned_id
+            if version_info < (3, 14) and model.id is None:
+                model.id = uuid4()
 
         await _uuidv7_file_handle(model).put_async(
             b"data",
@@ -370,10 +400,14 @@ async def test_put_async_flush_populates_uuidv7_id_before_key_generation(engine:
             flush=True,
         )
 
-        assert flush_calls == 2
-        assert model.id == assigned_id
+        assert flush_calls == (1 if version_info >= (3, 14) else 2)
+        assert isinstance(model.id, UUID)
+        if version_info >= (3, 14):
+            assert model.id.version == 7
+        else:
+            assert model.id.version == 4
         assert model.file is not None
-        assert model.file.key == f"{assigned_id}/file"
+        assert model.file.key == f"{model.id}/file"
         assert model.file.status == "pending"
         assert store_ops.calls == []
 
@@ -387,15 +421,32 @@ async def test_put_async_rejects_uuidv7_model_without_flush(engine: Engine) -> N
         model = UUIDv7FileModel()
         session.add(model)
 
-        with pytest.raises(ValueError, match=r"Pass flush=True or flush the model before calling put_async"):
-            await _uuidv7_file_handle(model).put_async(
+        if version_info >= (3, 14):
+            assert isinstance(model.id, UUID)
+            assert model.id.version == 7
+
+            put_result = await _uuidv7_file_handle(model).put_async(
                 b"data",
                 content_type="text/plain",
-                session=session,
+                session=cast("AsyncSession", AsyncSessionShim(session)),
+                flush=False,
             )
 
-        assert model.file is None
-        assert store_ops.calls == []
+            assert put_result == {"e_tag": None, "version": None}
+            assert model.file is not None
+            assert model.file.key == f"{model.id}/file"
+            assert model.file.status == "pending"
+            assert store_ops.calls == []
+        else:
+            with pytest.raises(ValueError, match=r"Pass flush=True or flush the model before calling put_async"):
+                await _uuidv7_file_handle(model).put_async(
+                    b"data",
+                    content_type="text/plain",
+                    session=session,
+                )
+
+            assert model.file is None
+            assert store_ops.calls == []
 
 
 @pytest.mark.asyncio

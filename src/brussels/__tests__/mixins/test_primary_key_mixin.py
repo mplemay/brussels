@@ -1,5 +1,7 @@
 import inspect
 from collections.abc import Iterator
+from dataclasses import fields
+from sys import version_info
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -81,6 +83,10 @@ def test_uuidv7_id_column_definition() -> None:
     compiled_server_default = cast("Any", server_default).arg.compile(dialect=postgresql.dialect())
     assert "uuidv7" in str(compiled_server_default)
 
+    if version_info >= (3, 14):
+        field_map = {field.name: field for field in fields(UUIDv7Widget)}
+        assert field_map["id"].default_factory.__name__ == "uuid7"
+
 
 def test_uuidv7_id_not_in_init_signature() -> None:
     signature = inspect.signature(UUIDv7Widget)
@@ -91,10 +97,14 @@ def test_uuidv7_id_not_in_init_signature() -> None:
         widget_cls(id=uuid4(), name="widget")
 
 
-def test_uuidv7_id_is_not_populated_before_flush() -> None:
+def test_uuidv7_id_default_matches_runtime() -> None:
     widget = UUIDv7Widget(name="widget")
 
-    assert widget.id is None
+    if version_info >= (3, 14):
+        assert isinstance(widget.id, UUID)
+        assert widget.id.version == 7
+    else:
+        assert widget.id is None
 
 
 def test_uuidv7_models_satisfy_primary_key_mixin_contract() -> None:

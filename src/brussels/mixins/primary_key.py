@@ -1,7 +1,11 @@
+from sys import version_info
 from uuid import UUID, uuid4
 
 from sqlalchemy import func
 from sqlalchemy.orm import Mapped, MappedAsDataclass, declarative_mixin, mapped_column
+
+if version_info >= (3, 14):
+    from uuid import uuid7
 
 
 @declarative_mixin
@@ -34,28 +38,53 @@ class PrimaryKeyMixin(MappedAsDataclass):
     )
 
 
-@declarative_mixin
-class UUIDv7PrimaryKeyMixin(PrimaryKeyMixin):
-    """Mixin that adds a PostgreSQL 18+ UUIDv7 primary key column.
+if version_info >= (3, 14):
 
-    Extends PrimaryKeyMixin so models continue to satisfy APIs that require the
-    existing primary-key mixin contract. The id field is excluded from __init__
-    (init=False) and is generated during insert using PostgreSQL's uuidv7()
-    function. Because the UUID is database generated, ID-derived workflows
-    require the row to be flushed or already persisted.
+    @declarative_mixin
+    class UUIDv7PrimaryKeyMixin(PrimaryKeyMixin):
+        """Mixin that adds a UUIDv7 primary key column.
 
-    Usage:
-        class MyModel(DataclassBase, UUIDv7PrimaryKeyMixin, TimestampMixin):
-            __tablename__ = "my_table"
-            name: Mapped[str]
+        On Python 3.14+, new instances get an id from stdlib uuid7()
+        immediately. The column still keeps the PostgreSQL uuidv7() insert and
+        server defaults for database-side fallback.
 
-    This mixin is only supported on PostgreSQL 18+ because it relies on the
-    built-in uuidv7() database function.
-    """
+        Usage:
+            class MyModel(DataclassBase, UUIDv7PrimaryKeyMixin, TimestampMixin):
+                __tablename__ = "my_table"
+                name: Mapped[str]
+        """
 
-    id: Mapped[UUID] = mapped_column(
-        primary_key=True,
-        insert_default=func.uuidv7(),
-        server_default=func.uuidv7(),
-        init=False,
-    )
+        id: Mapped[UUID] = mapped_column(
+            primary_key=True,
+            default_factory=uuid7,
+            insert_default=func.uuidv7(),
+            server_default=func.uuidv7(),
+            init=False,
+        )
+else:
+
+    @declarative_mixin
+    class UUIDv7PrimaryKeyMixin(PrimaryKeyMixin):
+        """Mixin that adds a PostgreSQL 18+ UUIDv7 primary key column.
+
+        Extends PrimaryKeyMixin so models continue to satisfy APIs that require
+        the existing primary-key mixin contract. The id field is excluded from
+        __init__ (init=False) and is generated during insert using PostgreSQL's
+        uuidv7() function. Because the UUID is database generated, ID-derived
+        workflows require the row to be flushed or already persisted.
+
+        Usage:
+            class MyModel(DataclassBase, UUIDv7PrimaryKeyMixin, TimestampMixin):
+                __tablename__ = "my_table"
+                name: Mapped[str]
+
+        This mixin is only supported on PostgreSQL 18+ because it relies on the
+        built-in uuidv7() database function.
+        """
+
+        id: Mapped[UUID] = mapped_column(
+            primary_key=True,
+            insert_default=func.uuidv7(),
+            server_default=func.uuidv7(),
+            init=False,
+        )

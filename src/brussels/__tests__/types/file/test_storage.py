@@ -85,7 +85,7 @@ def test_process_bind_param_accepts_dict_payload() -> None:
 
 def test_process_bind_param_rejects_invalid_value_type() -> None:
     with pytest.raises(ValueError, match="RemoteStorage RemoteMetadata is invalid"):
-        RemoteStorage(store=MemoryStore()).process_bind_param("bad-value", None)  # type: ignore[arg-type]
+        RemoteStorage(store=MemoryStore()).process_bind_param("bad-value", None)  # ty: ignore[invalid-argument-type]
 
 
 def test_process_result_value_none_returns_none() -> None:

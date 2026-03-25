@@ -27,7 +27,7 @@ class EncryptedString(TypeDecorator[str]):
             msg = "EncryptedString key must be a valid Fernet key."
             raise ValueError(msg) from exc
 
-    def process_bind_param(self, value: str | None, _dialect: Any) -> str | None:  # type: ignore[override]  # noqa: ANN401
+    def process_bind_param(self, value: str | None, _dialect: Any) -> str | None:  # ty: ignore[invalid-method-override]  # noqa: ANN401
         if value is None:
             return None
         if not isinstance(value, str):
@@ -36,7 +36,7 @@ class EncryptedString(TypeDecorator[str]):
             raise TypeError(msg)
         return self._fernet.encrypt(value.encode("utf-8")).decode("ascii")
 
-    def process_result_value(self, value: Any, _dialect: Any) -> str | None:  # type: ignore[override]  # noqa: ANN401
+    def process_result_value(self, value: Any, _dialect: Any) -> str | None:  # ty: ignore[invalid-method-override]  # noqa: ANN401
         if value is None:
             return None
         if not isinstance(value, str):

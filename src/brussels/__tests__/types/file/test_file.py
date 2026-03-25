@@ -87,7 +87,7 @@ def test_from_metadata_rejects_non_remote_storage_field() -> None:
     model = FileModel()
 
     with pytest.raises(TypeError, match=r"must use brussels\.types\.file\.RemoteStorage"):
-        RemoteFile.from_metadata(model, FileModel.id)  # type: ignore[arg-type]
+        RemoteFile.from_metadata(model, FileModel.id)  # ty: ignore[invalid-argument-type]
 
 
 def test_from_metadata_rejects_field_from_different_model() -> None:

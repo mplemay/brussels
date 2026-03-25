@@ -51,7 +51,7 @@ def test_constructor_accepts_bytes_key() -> None:
 
 def test_constructor_rejects_non_key_type() -> None:
     with pytest.raises(TypeError, match="key must be str or bytes"):
-        EncryptedString(key=123)  # type: ignore[arg-type]
+        EncryptedString(key=123)  # ty: ignore[invalid-argument-type]
 
 
 def test_constructor_rejects_malformed_key() -> None:
@@ -67,7 +67,7 @@ def test_process_bind_param_returns_none() -> None:
 def test_process_bind_param_rejects_non_str_value() -> None:
     encrypted = EncryptedString(key=MODEL_KEY)
     with pytest.raises(TypeError, match="requires str value"):
-        encrypted.process_bind_param(1, None)  # type: ignore[arg-type]
+        encrypted.process_bind_param(1, None)  # ty: ignore[invalid-argument-type]
 
 
 def test_process_bind_param_encrypts_plaintext() -> None:

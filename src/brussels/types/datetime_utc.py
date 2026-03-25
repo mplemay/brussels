@@ -11,7 +11,7 @@ class DateTimeUTC(TypeDecorator[datetime]):
     impl = DateTime(timezone=True)
     cache_ok = True
 
-    def process_bind_param(self, value: datetime | None, _dialect: Any) -> datetime | None:  # type: ignore[override]  # noqa: ANN401
+    def process_bind_param(self, value: datetime | None, _dialect: Any) -> datetime | None:  # ty: ignore[invalid-method-override]  # noqa: ANN401
         if value is None:
             return None
         if not isinstance(value, datetime):
@@ -24,7 +24,7 @@ class DateTimeUTC(TypeDecorator[datetime]):
             raise TypeError(msg)
         return utc(value, raise_on_naive=False)
 
-    def process_result_value(self, value: Any, _dialect: Any) -> datetime | None:  # type: ignore[override]  # noqa: ANN401
+    def process_result_value(self, value: Any, _dialect: Any) -> datetime | None:  # ty: ignore[invalid-method-override]  # noqa: ANN401
         if value is None:
             return None
         return utc(value, raise_on_naive=False)

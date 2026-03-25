@@ -33,7 +33,7 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
         self,
         value: RemoteMetadata | RemoteMetadataDict | None,
         _dialect: object,
-    ) -> RemoteMetadataDict | None:  # type: ignore[override]
+    ) -> RemoteMetadataDict | None:  # ty: ignore[invalid-method-override]
         if value is None:
             return None
         try:
@@ -47,7 +47,7 @@ class RemoteStorage(TypeDecorator[RemoteMetadata]):
         self,
         value: object,
         _dialect: object,
-    ) -> RemoteMetadata | None:  # type: ignore[override]
+    ) -> RemoteMetadata | None:  # ty: ignore[invalid-method-override]
         if value is None:
             return None
         if not isinstance(value, dict):

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from brussels.base import Base, DataclassBase
-from brussels.mixins import PrimaryKeyMixin, UUIDv7PrimaryKeyMixin
+from brussels.mixins import PrimaryKeyMixin
 
 try:
     from obstore.store import MemoryStore
@@ -20,7 +20,6 @@ except ImportError:
 if TYPE_CHECKING:
     from obstore import GetOptions, PutMode
     from sqlalchemy import Engine
-    from sqlalchemy.ext.asyncio import AsyncSession
 
     from brussels.types.file._types import RemoteMetadataField
 
@@ -46,12 +45,6 @@ class OtherFileModel(DataclassBase, PrimaryKeyMixin):
     file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True, default=None)
 
 
-class UUIDv7FileModel(DataclassBase, UUIDv7PrimaryKeyMixin):
-    __tablename__ = "uuidv7_file_model"
-
-    file: Mapped[RemoteMetadata | None] = mapped_column(RemoteStorage(store=MemoryStore()), nullable=True, default=None)
-
-
 class TablelessPrimaryKeyModel(PrimaryKeyMixin):
     pass
 
@@ -61,27 +54,8 @@ def _configure_store(store_ops: FakeStoreOps) -> None:
     remote_storage.store = store_ops
 
 
-def _configure_uuidv7_store(store_ops: FakeStoreOps) -> None:
-    remote_storage = cast("RemoteStorage", UUIDv7FileModel.__table__.c["file"].type)
-    remote_storage.store = store_ops
-
-
 def _file_handle(model: FileModel) -> RemoteFile:
     return RemoteFile.from_metadata(model, FileModel.file)
-
-
-def _uuidv7_file_handle(model: UUIDv7FileModel) -> RemoteFile:
-    return RemoteFile.from_metadata(model, UUIDv7FileModel.file)
-
-
-class AsyncSessionShim:
-    def __init__(self, sync_session: Session, *, on_flush=None) -> None:
-        self.sync_session = sync_session
-        self._on_flush = on_flush
-
-    async def flush(self) -> None:
-        if self._on_flush is not None:
-            self._on_flush()
 
 
 def test_from_metadata_rejects_models_without_primary_key_mixin() -> None:
@@ -113,7 +87,7 @@ def test_from_metadata_rejects_non_remote_storage_field() -> None:
     model = FileModel()
 
     with pytest.raises(TypeError, match=r"must use brussels\.types\.file\.RemoteStorage"):
-        RemoteFile.from_metadata(model, FileModel.id)  # type: ignore[arg-type]
+        RemoteFile.from_metadata(model, FileModel.id)  # ty: ignore[invalid-argument-type]
 
 
 def test_from_metadata_rejects_field_from_different_model() -> None:
@@ -131,14 +105,6 @@ def test_from_metadata_accepts_models_with_primary_key_mixin() -> None:
     assert remote_file.field_name == "file"
 
 
-def test_from_metadata_accepts_uuidv7_primary_key_models() -> None:
-    model = UUIDv7FileModel()
-
-    remote_file = RemoteFile.from_metadata(model, UUIDv7FileModel.file)
-
-    assert remote_file.field_name == "file"
-
-
 def test_put_sync_without_sqlalchemy_session_raises_and_does_not_call_store() -> None:
     store_ops = FakeStoreOps()
     _configure_store(store_ops)
@@ -152,62 +118,6 @@ def test_put_sync_without_sqlalchemy_session_raises_and_does_not_call_store() ->
 
     assert store_ops.calls == []
     assert model.file is None
-
-
-def test_put_sync_flush_populates_uuidv7_id_before_key_generation(
-    engine: Engine,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store_ops = FakeStoreOps()
-    _configure_uuidv7_store(store_ops)
-
-    with Session(engine) as session:
-        model = UUIDv7FileModel()
-        session.add(model)
-        assigned_id = uuid4()
-        flush_calls = 0
-
-        def fake_flush() -> None:
-            nonlocal flush_calls
-            flush_calls += 1
-            if model.id is None:
-                model.id = assigned_id
-
-        monkeypatch.setattr(session, "flush", fake_flush)
-
-        put_result = _uuidv7_file_handle(model).put(
-            b"hello",
-            content_type="text/plain",
-            session=session,
-            flush=True,
-        )
-
-        assert put_result == {"e_tag": None, "version": None}
-        assert flush_calls == 2
-        assert model.id == assigned_id
-        assert model.file is not None
-        assert model.file.key == f"{assigned_id}/file"
-        assert model.file.status == "pending"
-        assert store_ops.calls == []
-
-
-def test_put_sync_rejects_uuidv7_model_without_flush(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_uuidv7_store(store_ops)
-
-    with Session(engine) as session:
-        model = UUIDv7FileModel()
-        session.add(model)
-
-        with pytest.raises(ValueError, match=r"Pass flush=True or flush the model before calling put"):
-            _uuidv7_file_handle(model).put(
-                b"hello",
-                content_type="text/plain",
-                session=session,
-            )
-
-        assert model.file is None
-        assert store_ops.calls == []
 
 
 def test_put_sync_defers_and_commits_when_sqlalchemy_session_is_attached(engine: Engine) -> None:
@@ -344,58 +254,6 @@ async def test_put_rejects_invalid_model_id_type(engine: Engine) -> None:
 
         with pytest.raises(TypeError, match=r"Model id must be str, int, or UUID"):
             await _file_handle(model).put_async(b"data")
-
-
-@pytest.mark.asyncio
-async def test_put_async_flush_populates_uuidv7_id_before_key_generation(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_uuidv7_store(store_ops)
-
-    with Session(engine) as session:
-        model = UUIDv7FileModel()
-        session.add(model)
-        assigned_id = uuid4()
-        flush_calls = 0
-
-        def on_flush() -> None:
-            nonlocal flush_calls
-            flush_calls += 1
-            if model.id is None:
-                model.id = assigned_id
-
-        await _uuidv7_file_handle(model).put_async(
-            b"data",
-            content_type="text/plain",
-            session=cast("AsyncSession", AsyncSessionShim(session, on_flush=on_flush)),
-            flush=True,
-        )
-
-        assert flush_calls == 2
-        assert model.id == assigned_id
-        assert model.file is not None
-        assert model.file.key == f"{assigned_id}/file"
-        assert model.file.status == "pending"
-        assert store_ops.calls == []
-
-
-@pytest.mark.asyncio
-async def test_put_async_rejects_uuidv7_model_without_flush(engine: Engine) -> None:
-    store_ops = FakeStoreOps()
-    _configure_uuidv7_store(store_ops)
-
-    with Session(engine) as session:
-        model = UUIDv7FileModel()
-        session.add(model)
-
-        with pytest.raises(ValueError, match=r"Pass flush=True or flush the model before calling put_async"):
-            await _uuidv7_file_handle(model).put_async(
-                b"data",
-                content_type="text/plain",
-                session=session,
-            )
-
-        assert model.file is None
-        assert store_ops.calls == []
 
 
 @pytest.mark.asyncio

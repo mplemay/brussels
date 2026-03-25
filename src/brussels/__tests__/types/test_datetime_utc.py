@@ -16,7 +16,7 @@ def test_process_bind_param_returns_none() -> None:
 @pytest.mark.parametrize("value", [date(2024, 1, 1), object()])
 def test_process_bind_param_rejects_non_datetime(value: object) -> None:
     with pytest.raises(TypeError) as excinfo:
-        DateTimeUTC().process_bind_param(value, None)  # type: ignore[arg-type]
+        DateTimeUTC().process_bind_param(value, None)  # ty: ignore[invalid-argument-type]
 
     message = str(excinfo.value)
     assert "DateTimeUTC requires datetime object" in message

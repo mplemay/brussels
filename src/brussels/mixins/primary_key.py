@@ -1,12 +1,13 @@
 import sys
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy.orm import Mapped, MappedAsDataclass, declarative_mixin, mapped_column
 
+# uuid7 exists from Python 3.14 onward; 3.12-3.13 use uuid4 for client-side IDs.
 if sys.version_info >= (3, 14):
     from uuid import uuid7 as _pk_uuid
 else:
-    _pk_uuid = uuid4
+    from uuid import uuid4 as _pk_uuid
 
 
 @declarative_mixin

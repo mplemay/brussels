@@ -1,7 +1,12 @@
+import sys
 from uuid import UUID, uuid4
 
-from sqlalchemy import func
 from sqlalchemy.orm import Mapped, MappedAsDataclass, declarative_mixin, mapped_column
+
+if sys.version_info >= (3, 14):
+    from uuid import uuid7 as _pk_uuid
+else:
+    _pk_uuid = uuid4
 
 
 @declarative_mixin
@@ -12,50 +17,19 @@ class PrimaryKeyMixin(MappedAsDataclass):
     When used with DataclassBase (which also inherits MappedAsDataclass), the
     duplicate inheritance is safely handled by Python's MRO (Method Resolution Order).
 
-    The id field is excluded from __init__ (init=False) and is automatically
-    generated both client-side (default_factory=uuid4) and server-side
-    (server_default=gen_random_uuid()) for maximum compatibility.
+    The id field is excluded from __init__ (init=False) and is generated
+    client-side: uuid7() on Python 3.14+, otherwise uuid4(). There is no
+    database server_default; non-ORM inserts must supply id explicitly if the
+    schema does not define its own DEFAULT.
 
     Usage:
         class MyModel(DataclassBase, PrimaryKeyMixin, TimestampMixin):
             __tablename__ = "my_table"
             name: Mapped[str]
-
-    The UUID is:
-    - Generated client-side by default (uuid4)
-    - Has server-side fallback (gen_random_uuid() for PostgreSQL)
     """
 
     id: Mapped[UUID] = mapped_column(
         primary_key=True,
-        default_factory=uuid4,
-        server_default=func.gen_random_uuid(),
-        init=False,
-    )
-
-
-@declarative_mixin
-class UUIDv7PrimaryKeyMixin(PrimaryKeyMixin):
-    """Mixin that adds a PostgreSQL 18+ UUIDv7 primary key column.
-
-    Extends PrimaryKeyMixin so models continue to satisfy APIs that require the
-    existing primary-key mixin contract. The id field is excluded from __init__
-    (init=False) and is generated during insert using PostgreSQL's uuidv7()
-    function. Because the UUID is database generated, ID-derived workflows
-    require the row to be flushed or already persisted.
-
-    Usage:
-        class MyModel(DataclassBase, UUIDv7PrimaryKeyMixin, TimestampMixin):
-            __tablename__ = "my_table"
-            name: Mapped[str]
-
-    This mixin is only supported on PostgreSQL 18+ because it relies on the
-    built-in uuidv7() database function.
-    """
-
-    id: Mapped[UUID] = mapped_column(
-        primary_key=True,
-        insert_default=func.uuidv7(),
-        server_default=func.uuidv7(),
+        default_factory=_pk_uuid,
         init=False,
     )

@@ -5,21 +5,14 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Engine, Table, create_engine
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from brussels.base import DataclassBase
-from brussels.mixins import PrimaryKeyMixin, TimestampMixin, UUIDv7PrimaryKeyMixin
+from brussels.mixins import PrimaryKeyMixin, TimestampMixin
 
 
 class Widget(DataclassBase, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "primary_key_widgets"
-
-    name: Mapped[str] = mapped_column()
-
-
-class UUIDv7Widget(DataclassBase, UUIDv7PrimaryKeyMixin, TimestampMixin):
-    __tablename__ = "primary_key_v7_widgets"
 
     name: Mapped[str] = mapped_column()
 
@@ -38,11 +31,7 @@ def test_id_column_definition() -> None:
     column = table.c.id
 
     assert column.primary_key is True
-
-    server_default = column.server_default
-    assert server_default is not None
-    compiled = cast("Any", server_default).arg.compile(dialect=postgresql.dialect())
-    assert "gen_random_uuid" in str(compiled)
+    assert column.server_default is None
 
 
 def test_id_not_in_init_signature() -> None:
@@ -63,41 +52,3 @@ def test_id_default_factory_generates_uuid_on_flush(engine: Engine) -> None:
         session.flush()
 
         assert isinstance(widget.id, UUID)
-
-
-def test_uuidv7_id_column_definition() -> None:
-    table = cast("Table", UUIDv7Widget.__table__)
-    column = table.c.id
-
-    assert column.primary_key is True
-
-    insert_default = column.default
-    assert insert_default is not None
-    compiled_insert_default = cast("Any", insert_default).arg.compile(dialect=postgresql.dialect())
-    assert "uuidv7" in str(compiled_insert_default)
-
-    server_default = column.server_default
-    assert server_default is not None
-    compiled_server_default = cast("Any", server_default).arg.compile(dialect=postgresql.dialect())
-    assert "uuidv7" in str(compiled_server_default)
-
-
-def test_uuidv7_id_not_in_init_signature() -> None:
-    signature = inspect.signature(UUIDv7Widget)
-    assert "id" not in signature.parameters
-
-    widget_cls = cast("Any", UUIDv7Widget)
-    with pytest.raises(TypeError):
-        widget_cls(id=uuid4(), name="widget")
-
-
-def test_uuidv7_id_is_not_populated_before_flush() -> None:
-    widget = UUIDv7Widget(name="widget")
-
-    assert widget.id is None
-
-
-def test_uuidv7_models_satisfy_primary_key_mixin_contract() -> None:
-    widget = UUIDv7Widget(name="widget")
-
-    assert isinstance(widget, PrimaryKeyMixin)
